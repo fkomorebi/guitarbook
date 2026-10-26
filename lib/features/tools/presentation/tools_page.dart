@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../tuner/tuner_page.dart';
+import '../../scales/scales_page.dart';
 import '../../metronome/metronome_page.dart';
 
 class ToolsPage extends StatelessWidget {
@@ -24,6 +25,20 @@ class ToolsPage extends StatelessWidget {
                   const SizedBox(height: 12),
                   Text('让练习更专注，让音乐更近一步。', style: theme.textTheme.bodyLarge),
                   const SizedBox(height: 32),
+                  Card.filled(
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.all(24),
+                      leading: const Icon(Icons.grid_on),
+                      title: const Text('音阶指板'),
+                      subtitle: const Text('各调常用音阶 · CAGED / 一弦三音'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ScalesPage(),
+                        ),
+                      ),
+                    ),
+                  ),
                   Card.filled(
                     child: ListTile(
                       contentPadding: const EdgeInsets.all(24),
