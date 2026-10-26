@@ -350,7 +350,11 @@ class _PitchGauge extends StatelessWidget {
           ),
           const Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [Text('偏低 −50'), Text('0'), Text('偏高 +50')],
+            children: [
+              Expanded(child: Text('偏低 −50')),
+              Expanded(child: Text('0', textAlign: TextAlign.center)),
+              Expanded(child: Text('偏高 +50', textAlign: TextAlign.right)),
+            ],
           ),
         ],
       ),

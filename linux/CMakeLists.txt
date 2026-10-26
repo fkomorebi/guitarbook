@@ -98,6 +98,10 @@ set_target_properties(${BINARY_NAME}
 )
 
 
+# The metronome uses generated PCM/WAV only. Avoid linking optional Xiph
+# codec libraries that flutter_soloud 4.x does not copy into the Linux bundle.
+set(ENV{NO_XIPH_LIBS} 1)
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)

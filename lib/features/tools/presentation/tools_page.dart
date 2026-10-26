@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../tuner/tuner_page.dart';
+import '../../metronome/metronome_page.dart';
 
 class ToolsPage extends StatelessWidget {
   const ToolsPage({super.key});
@@ -33,6 +34,20 @@ class ToolsPage extends StatelessWidget {
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute<void>(
                           builder: (_) => const TunerPage(),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Card.filled(
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.all(24),
+                      leading: const Icon(Icons.timer_outlined),
+                      title: const Text('节拍器'),
+                      subtitle: const Text('稳定节奏 · 速度调节与首拍重音'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const MetronomePage(),
                         ),
                       ),
                     ),
