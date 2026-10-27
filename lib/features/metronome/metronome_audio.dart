@@ -12,3 +12,8 @@ abstract interface class MetronomeAudio {
   Future<void> clear();
   Future<void> dispose();
 }
+
+/// Loop playback that can join an already playing loop at its current phase.
+abstract interface class PositionedLoopAudio implements MetronomeAudio {
+  void playAt(Duration offset);
+}

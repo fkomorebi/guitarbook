@@ -6,7 +6,9 @@ import 'metronome_audio.dart';
 import 'metronome_pattern.dart';
 
 class MetronomeController extends ChangeNotifier {
-  MetronomeController(this._audio);
+  MetronomeController(this._audio, {this.patternBuilder});
+
+  final MetronomePattern Function(int bpm)? patternBuilder;
 
   final MetronomeAudio _audio;
   final _visualClock = Stopwatch();
@@ -69,11 +71,12 @@ class MetronomeController extends ChangeNotifier {
           if (unlockError != null) throw unlockError;
           if (!_current(generation)) return;
           await _audio.prepare(
-            MetronomePattern(
-              bpm: patternBpm,
-              beats: patternBeats,
-              accent: patternAccent,
-            ),
+            patternBuilder?.call(patternBpm) ??
+                MetronomePattern(
+                  bpm: patternBpm,
+                  beats: patternBeats,
+                  accent: patternAccent,
+                ),
           );
           // Stop/reconfigure/background can happen while loading native audio.
           if (!_current(generation)) {

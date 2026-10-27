@@ -7,14 +7,18 @@ import 'metronome_pattern.dart';
 
 MetronomeAudio createMetronomeAudio() => _NativeMetronomeAudio();
 
-class _NativeMetronomeAudio implements MetronomeAudio {
+class _NativeMetronomeAudio implements PositionedLoopAudio {
   _NativeMetronomeAudio() {
     _clients++;
+    _id = _nextId++;
   }
 
   // Navigation can create a new page before the previous load has finished.
   // Share the engine lifetime and serialize loading/teardown across pages.
   static int _clients = 0;
+  static int _nextId = 0;
+  late final int _id;
+  int _loadId = 0;
   static bool _ownsEngine = false;
   static Future<void> _lifecycle = Future<void>.value();
   Future<void> _serialize(Future<void> Function() action) {
@@ -37,18 +41,26 @@ class _NativeMetronomeAudio implements MetronomeAudio {
       await _engine.init(sampleRate: 48000, bufferSize: 512);
       _ownsEngine = true;
     }
-    _source = await _engine.loadMem(
-      'metronome-${pattern.bpm}-${pattern.beats}-${pattern.accent}',
-      pattern.toWav(),
-    );
+    _source = await _engine.loadMem('loop-$_id-${_loadId++}', pattern.toWav());
   });
 
   @override
   void play() {
-    _voice = _engine.play(_source!, looping: true);
+    playAt(Duration.zero);
+  }
+
+  @override
+  void playAt(Duration offset) {
+    final oldVoice = _voice;
+    if (oldVoice != null && _engine.getIsValidVoiceHandle(oldVoice)) {
+      unawaited(_engine.stop(oldVoice));
+    }
+    _voice = _engine.play(_source!, looping: true, paused: true);
     if (!_engine.getIsValidVoiceHandle(_voice!)) {
       throw StateError('Could not start metronome audio');
     }
+    if (offset > Duration.zero) _engine.seek(_voice!, offset);
+    _engine.setPause(_voice!, false);
   }
 
   @override

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../tuner/tuner_page.dart';
+import '../../drums/drums_page.dart';
 import '../../chords/chords_page.dart';
 import '../../scales/scales_page.dart';
 import '../../metronome/metronome_page.dart';
@@ -26,6 +27,20 @@ class ToolsPage extends StatelessWidget {
                   const SizedBox(height: 12),
                   Text('让练习更专注，让音乐更近一步。', style: theme.textTheme.bodyLarge),
                   const SizedBox(height: 32),
+                  Card.filled(
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.all(24),
+                      leading: const Icon(Icons.album_outlined),
+                      title: const Text('鼓机'),
+                      subtitle: const Text('即兴伴奏 · 鼓机与 Looper 叠录'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const DrumsPage(),
+                        ),
+                      ),
+                    ),
+                  ),
                   Card.filled(
                     child: ListTile(
                       contentPadding: const EdgeInsets.all(24),

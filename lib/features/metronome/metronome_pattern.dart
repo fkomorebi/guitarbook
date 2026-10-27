@@ -27,6 +27,15 @@ class MetronomePattern {
     }
   }
 
+  /// A pre-rendered loop using the same platform playback and WAV encoding.
+  MetronomePattern.rendered({
+    required this.bpm,
+    required this.beats,
+    required this.sampleRate,
+    required this.framesPerBeat,
+    required this.samples,
+  }) : accent = false;
+
   final int bpm;
   final int beats;
   final bool accent;

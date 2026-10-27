@@ -7,7 +7,13 @@ import 'metronome_pattern.dart';
 
 MetronomeAudio createMetronomeAudio() => _WebMetronomeAudio();
 
-class _WebMetronomeAudio implements MetronomeAudio {
+class _WebMetronomeAudio implements PositionedLoopAudio {
+  _WebMetronomeAudio() {
+    _clients++;
+  }
+  static int _clients = 0;
+  static web.AudioContext? _sharedContext;
+  bool _disposed = false;
   web.AudioContext? _context;
   web.AudioBuffer? _buffer;
   web.AudioBufferSourceNode? _source;
@@ -15,7 +21,7 @@ class _WebMetronomeAudio implements MetronomeAudio {
 
   @override
   Future<void> unlock() {
-    final context = _context ??= web.AudioContext(
+    final context = _context ??= _sharedContext ??= web.AudioContext(
       web.AudioContextOptions(latencyHint: 'interactive'.toJS),
     );
     // Invoke resume during the click event, rather than after async loading.
@@ -38,7 +44,11 @@ class _WebMetronomeAudio implements MetronomeAudio {
   }
 
   @override
-  void play() {
+  void play() => playAt(Duration.zero);
+
+  @override
+  void playAt(Duration offset) {
+    silence();
     final context = _context!;
     if (context.state != 'running') {
       throw StateError('Browser audio is suspended');
@@ -47,8 +57,9 @@ class _WebMetronomeAudio implements MetronomeAudio {
       ..buffer = _buffer
       ..loop = true;
     source.connect(context.destination);
-    _startedAt = context.currentTime;
-    source.start(_startedAt);
+    final seconds = offset.inMicroseconds / 1000000;
+    _startedAt = context.currentTime - seconds;
+    source.start(context.currentTime, seconds);
     _source = source;
   }
 
@@ -81,9 +92,15 @@ class _WebMetronomeAudio implements MetronomeAudio {
 
   @override
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     await clear();
-    final context = _context;
     _context = null;
-    if (context != null) await context.close().toDart;
+    _clients--;
+    if (_clients == 0) {
+      final context = _sharedContext;
+      _sharedContext = null;
+      if (context != null) await context.close().toDart;
+    }
   }
 }

@@ -20,6 +20,7 @@ void main() {
 
   testWidgets('调音器可进入并选择琴弦', (tester) async {
     await tester.pumpWidget(const GuitarbookApp());
+    await tester.ensureVisible(find.text('吉他调音器'));
     await tester.tap(find.text('吉他调音器'));
     await tester.pumpAndSettle();
     expect(find.text('开始调音'), findsOneWidget);
