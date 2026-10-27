@@ -33,6 +33,22 @@ class LooperController extends ChangeNotifier {
   bool capturing = false;
   String? error;
   int compensationMs = 0;
+  double _playbackGain = 1;
+  double get playbackGain => _playbackGain;
+
+  void setPlaybackGain(double gain) {
+    if (_disposed || !gain.isFinite) return;
+    _playbackGain = gain.clamp(0, 4);
+    try {
+      for (final layer in _layers) {
+        layer.audio.setGain(_playbackGain);
+      }
+    } catch (_) {
+      _inputFailed('调节回放音量失败，请检查输出设备后重试。');
+    }
+    _notify();
+  }
+
   InputDevice? device;
   List<InputDevice> devices = [];
 
@@ -198,6 +214,7 @@ class LooperController extends ChangeNotifier {
                       position.inMicroseconds %
                       (length * 1000000 ~/ loopSampleRate),
                 );
+          audio.setGain(_playbackGain);
           audio.playAt(offset);
           _layers.add(_Layer(samples, audio));
           accepted = true;

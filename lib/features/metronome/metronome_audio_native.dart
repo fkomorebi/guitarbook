@@ -31,6 +31,18 @@ class _NativeMetronomeAudio implements PositionedLoopAudio {
   AudioSource? _source;
   SoundHandle? _voice;
   bool _disposed = false;
+  double _gain = 1;
+
+  @override
+  void setGain(double gain) {
+    _gain = gain;
+    final voice = _voice;
+    if (voice != null &&
+        _engine.isInitialized &&
+        _engine.getIsValidVoiceHandle(voice)) {
+      _engine.setVolume(voice, gain);
+    }
+  }
 
   @override
   Future<void> unlock() async {}
@@ -55,7 +67,7 @@ class _NativeMetronomeAudio implements PositionedLoopAudio {
     if (oldVoice != null && _engine.getIsValidVoiceHandle(oldVoice)) {
       unawaited(_engine.stop(oldVoice));
     }
-    _voice = _engine.play(_source!, looping: true, paused: true);
+    _voice = _engine.play(_source!, looping: true, paused: true, volume: _gain);
     if (!_engine.getIsValidVoiceHandle(_voice!)) {
       throw StateError('Could not start metronome audio');
     }

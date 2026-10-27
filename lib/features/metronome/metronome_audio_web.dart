@@ -18,6 +18,14 @@ class _WebMetronomeAudio implements PositionedLoopAudio {
   web.AudioBuffer? _buffer;
   web.AudioBufferSourceNode? _source;
   double _startedAt = 0;
+  double _gain = 1;
+  web.GainNode? _gainNode;
+
+  @override
+  void setGain(double gain) {
+    _gain = gain;
+    _gainNode?.gain.value = gain;
+  }
 
   @override
   Future<void> unlock() {
@@ -56,7 +64,11 @@ class _WebMetronomeAudio implements PositionedLoopAudio {
     final source = context.createBufferSource()
       ..buffer = _buffer
       ..loop = true;
-    source.connect(context.destination);
+    final gainNode = context.createGain();
+    gainNode.gain.value = _gain;
+    source.connect(gainNode);
+    gainNode.connect(context.destination);
+    _gainNode = gainNode;
     final seconds = offset.inMicroseconds / 1000000;
     _startedAt = context.currentTime - seconds;
     source.start(context.currentTime, seconds);
@@ -81,6 +93,8 @@ class _WebMetronomeAudio implements PositionedLoopAudio {
     if (source != null) {
       source.stop();
       source.disconnect();
+      _gainNode?.disconnect();
+      _gainNode = null;
     }
   }
 

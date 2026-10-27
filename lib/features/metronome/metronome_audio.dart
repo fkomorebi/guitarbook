@@ -16,4 +16,7 @@ abstract interface class MetronomeAudio {
 /// Loop playback that can join an already playing loop at its current phase.
 abstract interface class PositionedLoopAudio implements MetronomeAudio {
   void playAt(Duration offset);
+
+  /// Linear playback gain; retained across stop and play.
+  void setGain(double gain);
 }

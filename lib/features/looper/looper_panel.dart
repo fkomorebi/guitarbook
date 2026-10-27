@@ -431,9 +431,32 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
         ),
       ],
     );
+    final volume = Row(
+      children: [
+        const Icon(Icons.volume_up_rounded, size: 18),
+        const SizedBox(width: 8),
+        Text('回放音量', style: theme.textTheme.labelMedium),
+        Expanded(
+          child: Slider(
+            key: const ValueKey('loop-volume'),
+            value: _c.playbackGain,
+            min: 0,
+            max: 4,
+            divisions: 40,
+            label: '${(_c.playbackGain * 100).round()}%',
+            semanticFormatterCallback: (v) => '回放音量 ${(v * 100).round()}%',
+            onChanged: _c.setPlaybackGain,
+          ),
+        ),
+        Text(
+          '${(_c.playbackGain * 100).round()}%',
+          style: theme.textTheme.labelMedium,
+        ),
+      ],
+    );
     return Container(
       key: const ValueKey('looper-deck'),
-      padding: EdgeInsets.all(compact ? 14 : 20),
+      padding: EdgeInsets.all(compact ? 12 : 20),
       decoration: BoxDecoration(
         color: colors.surface,
         borderRadius: BorderRadius.circular(24),
@@ -446,7 +469,7 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
           if (widget.landscape)
             Row(
               children: [
-                SizedBox(width: 180, child: pedal),
+                SizedBox(width: 230, child: Column(children: [pedal, volume])),
                 const SizedBox(width: 20),
                 Expanded(
                   child: Column(
@@ -476,6 +499,7 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
             SizedBox(height: compact ? 6 : 10),
             mouse,
           ],
+          if (!widget.landscape) volume,
           if (_c.error != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -590,6 +614,8 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
       '补偿仅影响后续叠录的对齐。录音和鼓机不自动对拍、变速或量化；实际延迟和长期同步需设备验证。MIDI、手柄和后台全局快捷键暂未接入。',
     ),
     const SizedBox(height: 12),
+    const Text('回放音量 0–400%，100% 为原回放电平。调高会同时放大底噪，多层叠加失真时请调低；不改变录音输入或鼓机音量。'),
+    const SizedBox(height: 8),
     const Text(
       '首层：踩一次录音，再踩一次循环。播放中踩一次叠录，再踩一次结束，或满一圈自动结束；最多 6 层。停止丢弃未完成录音，保留已完成层。',
     ),

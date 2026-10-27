@@ -52,6 +52,10 @@ class FakeInput implements LoopInput {
 }
 
 class FakeOutput implements PositionedLoopAudio {
+  double gain = 1;
+  @override
+  void setGain(double gain) => this.gain = gain;
+
   bool playing = false;
   bool disposed = false;
   bool failUnlock = false;
@@ -168,6 +172,7 @@ void main() {
         outputs.add(a);
         return a;
       });
+      c.setPlaybackGain(2);
       c.mainPedal();
       await c.settled;
       expect(c.recording, isTrue);
@@ -178,6 +183,9 @@ void main() {
       expect(c.layers, 1);
       expect(c.playing, isTrue);
       expect(c.seconds, 1);
+      expect(outputs.first.gain, 2);
+      c.setPlaybackGain(3);
+      expect(outputs.first.gain, 3);
       outputs.first.offset = const Duration(milliseconds: 500);
       c.mainPedal();
       await c.settled;
@@ -186,6 +194,11 @@ void main() {
       c.mainPedal();
       await c.settled;
       expect(c.layers, 2);
+      expect(outputs.last.gain, 3);
+      c.setPlaybackGain(0);
+      expect(outputs.every((a) => a.gain == 0), isTrue);
+      c.setPlaybackGain(10);
+      expect(c.playbackGain, 4);
       expect(outputs.first.playing, isTrue);
       expect(outputs.last.offset, const Duration(milliseconds: 500));
       c.undo();
@@ -200,6 +213,7 @@ void main() {
       await c.settled;
       expect(c.playing, isTrue);
       expect(outputs.first.offset, Duration.zero);
+      expect(outputs.first.gain, 4);
       c.clear();
       await c.settled;
       expect(c.layers, 0);
@@ -409,6 +423,11 @@ void main() {
           ),
         ),
       );
+      final volume = find.byKey(const ValueKey('loop-volume'));
+      await tester.ensureVisible(volume);
+      await tester.drag(volume, const Offset(35, 0));
+      await tester.pump();
+      expect(c.playbackGain, greaterThan(1));
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pump();
       expect(c.recording, isTrue);
