@@ -71,6 +71,15 @@ void main() {
     await tester.tap(find.text('停止伴奏'));
     await tester.pump();
     expect(audio.playing, isFalse);
+    await tester.ensureVisible(find.text('拉丁'));
+    await tester.tap(find.text('拉丁'));
+    await tester.pump();
+    expect(find.textContaining('摇摆 0%'), findsOneWidget);
+    await tester.ensureVisible(find.text('开始伴奏'));
+    await tester.tap(find.text('开始伴奏'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(audio.playing, isTrue);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await tester.pump();

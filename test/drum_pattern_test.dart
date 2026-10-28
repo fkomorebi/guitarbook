@@ -2,6 +2,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:guitarbook/features/drums/drum_pattern.dart';
 
 void main() {
+  test('style presets have valid distinct rhythms', () {
+    expect(drumPresets, hasLength(12));
+    expect(drumPresets.map((p) => p.name).toSet(), hasLength(12));
+    final rhythms = <String>{};
+    for (final preset in drumPresets) {
+      expect(preset.hits, hasLength(3));
+      expect(preset.swing, inInclusiveRange(0, 60));
+      for (final row in preset.hits) {
+        expect(row, isNotEmpty);
+        expect(row.toSet(), hasLength(row.length));
+        expect(row.every((step) => step >= 0 && step < 16), isTrue);
+      }
+      rhythms.add('${preset.hits}:${preset.swing}');
+    }
+    expect(rhythms, hasLength(12));
+  });
   test('presets render finite bounded loops at all tempo limits', () {
     for (final bpm in [30, 100, 137, 240]) {
       for (final preset in drumPresets) {
