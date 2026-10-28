@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guitarbook/features/effects/effects_backend.dart';
 import 'package:guitarbook/features/effects/effects_page.dart';
+import 'package:guitarbook/features/effects/pedal_board.dart';
 
 class FakeEffects extends EffectsBackend {
   final calls = <String>[];
@@ -10,6 +13,8 @@ class FakeEffects extends EffectsBackend {
   bool released = false;
   bool fail = false;
   int frames = 128;
+  double gain = 0.5;
+  Completer<void>? starting;
   final plugins = <Map<String, dynamic>>[];
 
   @override
@@ -23,8 +28,12 @@ class FakeEffects extends EffectsBackend {
     calls.add(command);
     requests.add({'command': command, ...arguments});
     if (fail) throw StateError('测试设备中断');
+    if (command == 'gain') gain = (arguments['value'] as num).toDouble();
     if (command == 'audioBuffer') frames = arguments['frames'] as int;
-    if (command == 'start') running = true;
+    if (command == 'start') {
+      await starting?.future;
+      running = true;
+    }
     if (command == 'stop') running = false;
     if (command == 'load') plugins.add({'name': 'Test Gain', 'bypass': false});
     if (command == 'builtin') {
@@ -61,9 +70,10 @@ class FakeEffects extends EffectsBackend {
     }
     if (command == 'remove') plugins.removeAt(arguments['index'] as int);
     return {
+      'available': command == 'probe',
       'running': running,
       'plugins': List.of(plugins),
-      'gain': 0.5,
+      'gain': gain,
       'sampleRate': 48000,
       'bufferSize': frames,
       'requestedBuffer': frames,
@@ -91,7 +101,32 @@ void main() {
   testWidgets('效果器加载、监听、旁通、停止与离页释放', (tester) async {
     final backend = FakeEffects();
     await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
-    await tester.scrollUntilVisible(find.byType(TextField), 200);
+    await tester.pump();
+    expect(backend.running, isTrue);
+    await tester.scrollUntilVisible(
+      find.text('外部 VST3 插件'),
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.ensureVisible(find.text('外部 VST3 插件'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('外部 VST3 插件'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byType(TextField),
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '/tmp/Test.vst3');
     tester.testTextInput.hide();
@@ -110,18 +145,6 @@ void main() {
     await tester.pump();
     await tester.scrollUntilVisible(
       find.text('1. Test Gain'),
-      200,
-      scrollable: find
-          .descendant(
-            of: find.byType(ListView),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('1. Test Gain'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('开始监听'),
       -200,
       scrollable: find
           .descendant(
@@ -131,12 +154,13 @@ void main() {
           .first,
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('开始监听'));
-    await tester.pump();
-    expect(find.text('正在监听'), findsOneWidget);
+    expect(find.text('1. Test Gain'), findsOneWidget);
+    expect(backend.calls.where((c) => c == 'start').length, 1);
+    expect(backend.calls, isNot(contains('stop')));
+    expect(backend.running, isTrue);
 
     await tester.scrollUntilVisible(
-      find.text('旁通'),
+      find.byKey(const ValueKey('pedal-switch-0')),
       200,
       scrollable: find
           .descendant(
@@ -146,7 +170,7 @@ void main() {
           .first,
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('旁通'));
+    await tester.tap(find.byKey(const ValueKey('pedal-switch-0')));
     await tester.pump();
     expect(backend.plugins.single['bypass'], isTrue);
     await tester.scrollUntilVisible(
@@ -171,19 +195,54 @@ void main() {
   testWidgets('停止时可调缓冲并显示生效值，监听时禁用缓冲修改', (tester) async {
     final backend = FakeEffects();
     await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pump();
+    await tester.tap(find.text('停止监听'));
+    await tester.pump();
+    await tester.scrollUntilVisible(
+      find.text('声卡设置与延迟诊断'),
+      150,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.ensureVisible(find.text('声卡设置与延迟诊断'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('声卡设置与延迟诊断'));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('256 帧'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('256 帧'));
     await tester.pump();
     expect(backend.frames, 256);
-    await tester.scrollUntilVisible(find.text('开始监听'), -150);
+    await tester.scrollUntilVisible(
+      find.text('开始监听'),
+      -150,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
     await tester.pumpAndSettle();
     await tester.pumpAndSettle();
     await tester.tap(find.text('开始监听'));
     await tester.pump();
     final choices = tester.widgetList<ChoiceChip>(find.byType(ChoiceChip));
     expect(choices.every((choice) => choice.onSelected == null), isTrue);
-    await tester.scrollUntilVisible(find.textContaining('实际 256 帧'), 150);
+    await tester.scrollUntilVisible(
+      find.textContaining('实际 256 帧'),
+      150,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
     await tester.pumpAndSettle();
     expect(find.textContaining('每块 5.33 ms'), findsOneWidget);
     expect(find.textContaining('驱动报告：输入 8.0 ms'), findsOneWidget);
@@ -198,16 +257,15 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final backend = FakeEffects();
     await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pump();
+    expect(backend.running, isTrue);
     for (final label in ['Fuzz 法兹', 'Fuzz 法兹', '延迟']) {
       await tester.tap(find.text(label));
       await tester.pump();
     }
     expect(backend.plugins.map((p) => p['kind']), ['fuzz', 'fuzz', 'delay']);
     final firstParameter = find.byKey(const ValueKey('0-fuzz-0'));
-    await tester.drag(
-      find.descendant(of: firstParameter, matching: find.byType(Slider)),
-      const Offset(200, 0),
-    );
+    await tester.drag(firstParameter, const Offset(0, -80));
     await tester.pump(const Duration(milliseconds: 100));
     expect(
       backend.requests.where((r) => r['command'] == 'parameter'),
@@ -215,40 +273,57 @@ void main() {
     );
     expect(backend.plugins[0]['parameters'][0]['value'], isNot(12.0));
     expect(backend.plugins[1]['parameters'][0]['value'], 12.0);
-    await tester.tap(find.byTooltip('上移').at(2));
+    await tester.ensureVisible(find.byKey(const ValueKey('pedal-forward-2')));
+    await tester.tap(find.byKey(const ValueKey('pedal-forward-2')));
     await tester.pump();
     expect(backend.plugins.map((p) => p['kind']), ['fuzz', 'delay', 'fuzz']);
-    await tester.tap(find.byTooltip('移除').at(1));
+    await tester.ensureVisible(find.byKey(const ValueKey('pedal-remove-1')));
+    await tester.tap(find.byKey(const ValueKey('pedal-remove-1')));
     await tester.pump();
     expect(backend.plugins.map((p) => p['kind']), ['fuzz', 'fuzz']);
-    await tester.tap(find.text('开始监听'));
-    await tester.pump();
+    expect(backend.running, isTrue);
+    expect(backend.calls, isNot(contains('stop')));
     expect(
       tester
-          .widget<IconButton>(
-            find
-                .ancestor(
-                  of: find.byTooltip('移除').first,
-                  matching: find.byType(IconButton),
-                )
-                .first,
-          )
+          .widget<IconButton>(find.byKey(const ValueKey('pedal-remove-0')))
           .onPressed,
-      isNull,
-    );
-    expect(
-      tester.widget<FilterChip>(find.byType(FilterChip).first).onSelected,
       isNotNull,
     );
-    final liveSlider = find.descendant(
-      of: firstParameter,
-      matching: find.byType(Slider),
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('pedal-switch-0')))
+          .onPressed,
+      isNotNull,
     );
-    expect(tester.widget<Slider>(liveSlider).onChanged, isNotNull);
-    await tester.drag(liveSlider, const Offset(-100, 0));
+    expect(tester.widget<PedalKnob>(firstParameter).enabled, isTrue);
+    await tester.ensureVisible(firstParameter);
+    await tester.drag(firstParameter, const Offset(0, 60));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pumpWidget(const SizedBox());
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('启动期间后台停止，恢复不自动重启', (tester) async {
+    final ready = Completer<void>();
+    final backend = FakeEffects()..starting = ready;
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    ready.complete();
+    await tester.pump();
+    expect(backend.calls, containsAllInOrder(['start', 'stop']));
+    expect(backend.running, isFalse);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(backend.calls.where((c) => c == 'start'), hasLength(1));
+    await tester.tap(find.text('开始监听'));
+    await tester.pump();
+    expect(backend.running, isTrue);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    await tester.pump();
+    expect(backend.running, isFalse);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpWidget(const SizedBox());
+    expect(backend.released, isTrue);
   });
 
   testWidgets('效果器小屏大字号与失败恢复', (tester) async {
@@ -291,11 +366,29 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('开始监听'));
     await tester.pump();
-    await tester.scrollUntilVisible(find.textContaining('测试设备中断'), 150);
+    await tester.scrollUntilVisible(
+      find.textContaining('测试设备中断'),
+      150,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
     await tester.pumpAndSettle();
     expect(find.textContaining('测试设备中断'), findsOneWidget);
     backend.fail = false;
-    await tester.scrollUntilVisible(find.text('开始监听'), -150);
+    await tester.scrollUntilVisible(
+      find.text('开始监听'),
+      -150,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('开始监听'));
     await tester.pump();
@@ -312,7 +405,7 @@ void main() {
           .first,
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('补偿 ·'), findsOneWidget);
+    expect(find.text('补偿'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

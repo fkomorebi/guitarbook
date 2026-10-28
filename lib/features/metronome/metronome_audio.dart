@@ -5,6 +5,9 @@ abstract interface class MetronomeAudio {
   Future<void> unlock();
   Future<void> prepare(MetronomePattern pattern);
   void play();
+
+  /// Linear playback gain; changing it preserves the current playback phase.
+  void setGain(double gain);
   Duration get position;
 
   /// Immediately pause output, even while an older prepare is in flight.
@@ -16,7 +19,4 @@ abstract interface class MetronomeAudio {
 /// Loop playback that can join an already playing loop at its current phase.
 abstract interface class PositionedLoopAudio implements MetronomeAudio {
   void playAt(Duration offset);
-
-  /// Linear playback gain; retained across stop and play.
-  void setGain(double gain);
 }

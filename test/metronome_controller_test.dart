@@ -17,6 +17,9 @@ class FakeMetronomeAudio implements MetronomeAudio {
   Duration elapsed = Duration.zero;
   final prepared = <MetronomePattern>[];
 
+  double gain = 1;
+  @override
+  void setGain(double value) => gain = value;
   @override
   Future<void> unlock() async {
     unlocks++;
@@ -59,6 +62,39 @@ class FakeMetronomeAudio implements MetronomeAudio {
 Future<void> flush() => Future<void>.delayed(Duration.zero);
 
 void main() {
+  test(
+    'volume changes during loading and playback preserve phase and survive restart',
+    () async {
+      final audio = FakeMetronomeAudio()..loading = Completer<void>();
+      final c = MetronomeController(audio)..start();
+      await flush();
+      c.setVolume(0.3);
+      audio.loading!.complete();
+      await c.settled;
+      expect(audio.gain, 0.3);
+      audio.elapsed = const Duration(milliseconds: 900);
+      final clears = audio.clears;
+      c.setVolume(0);
+      expect(audio.audible, isTrue);
+      expect(audio.elapsed, const Duration(milliseconds: 900));
+      expect(audio.gain, 0);
+      c.setVolume(0.7);
+      expect(audio.starts, 1);
+      expect(audio.prepared, hasLength(1));
+      expect(audio.clears, clears);
+      c.stop();
+      await c.settled;
+      c.start();
+      await c.settled;
+      expect(audio.gain, 0.7);
+      c.configure(bpm: 120);
+      await c.settled;
+      expect(audio.gain, 0.7);
+      c.dispose();
+      await c.settled;
+    },
+  );
+
   test(
     'sound switches silence immediately and restart on the first beat',
     () async {

@@ -24,6 +24,20 @@ class MetronomeController extends ChangeNotifier {
   bool running = false;
   bool preparing = false;
   String? error;
+  double _volume = 1;
+  double get volume => _volume;
+
+  void setVolume(double volume) {
+    if (_disposed || !volume.isFinite) return;
+    _volume = volume.clamp(0, 1);
+    try {
+      _audio.setGain(_volume);
+    } catch (_) {
+      _fail();
+      return;
+    }
+    notifyListeners();
+  }
 
   bool _current(int generation) =>
       !_disposed && running && generation == _generation;
@@ -83,6 +97,7 @@ class MetronomeController extends ChangeNotifier {
             await _audio.clear();
             return;
           }
+          _audio.setGain(_volume);
           _audio.play();
           preparing = false;
           beat = 1;

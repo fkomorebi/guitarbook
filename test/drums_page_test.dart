@@ -7,6 +7,9 @@ import 'package:guitarbook/features/metronome/metronome_pattern.dart';
 class FakeDrumAudio implements MetronomeAudio {
   bool playing = false;
   MetronomePattern? pattern;
+  double gain = 1;
+  @override
+  void setGain(double value) => gain = value;
   @override
   Future<void> unlock() async {}
   @override

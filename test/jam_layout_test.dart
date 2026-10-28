@@ -5,95 +5,153 @@ import 'package:guitarbook/features/drums/drums_page.dart';
 import 'package:guitarbook/features/looper/looper_controller.dart';
 
 import 'drums_page_test.dart' show FakeDrumAudio;
+import 'effects_page_test.dart' show FakeEffects;
 import 'looper_test.dart' show FakeInput, FakeOutput;
 
-void main() {
-  testWidgets(
-    'landscape swing edits survive portrait reflow and looper controls show current action',
-    (tester) async {
-      tester.view.physicalSize = const Size(844, 390);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final input = FakeInput();
-      final c = LooperController(input, FakeOutput.new);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: DrumsPage(audio: FakeDrumAudio(), looperController: c),
-        ),
-      );
-      await tester.tap(find.text('摇摆 0%'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byType(Slider));
-      await tester.pump();
-      expect(find.text('摇摆 30%'), findsNWidgets(2));
-      await tester.tap(find.text('完成'));
-      await tester.pumpAndSettle();
-      tester.view.physicalSize = const Size(390, 720);
-      await tester.pump();
-      expect(find.text('摇摆 30%'), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('jam-tab-looper')));
-      await tester.pump();
-      expect(
-        tester
-            .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, '恢复循环'))
-            .onPressed,
-        isNull,
-      );
-      await tester.tap(find.byKey(const ValueKey('loop-main')));
-      await tester.pump();
-      expect(find.text('停止循环'), findsOneWidget);
-      expect(find.text('Looper · 录音中'), findsOneWidget);
-      input.emit(24000);
-      await tester.pump();
-      await tester.tap(find.byKey(const ValueKey('loop-main')));
-      await tester.pump();
-      expect(find.text('Looper · 循环中'), findsOneWidget);
-      await tester.tap(find.text('停止循环'));
-      await tester.pump();
-      expect(find.widgetWithText(OutlinedButton, '恢复循环'), findsOneWidget);
-      expect(
-        tester
-            .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, '恢复循环'))
-            .onPressed,
-        isNotNull,
-      );
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-      c.dispose();
-      await tester.pump();
-    },
-  );
+class UnsupportedEffects extends FakeEffects {
+  @override
+  bool get supported => false;
+}
 
-  testWidgets('active status labels fit narrow double-text layout', (
+Future<void> reveal(WidgetTester tester, Finder finder) async {
+  await tester.ensureVisible(finder);
+  await tester.pump();
+}
+
+void main() {
+  testWidgets('all tools share a page and their volumes are independent', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(320, 568);
+    tester.view.physicalSize = const Size(1280, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    final effects = FakeEffects();
+    final audio = FakeDrumAudio();
     final c = LooperController(FakeInput(), FakeOutput.new);
     await tester.pumpWidget(
       MaterialApp(
-        home: MediaQuery(
-          data: const MediaQueryData(textScaler: TextScaler.linear(2)),
-          child: DrumsPage(audio: FakeDrumAudio(), looperController: c),
+        home: DrumsPage(
+          audio: audio,
+          effectsBackend: effects,
+          looperController: c,
         ),
       ),
     );
+    await tester.pump();
+    expect(effects.calls.first, 'probe');
+    expect(effects.running, isFalse);
+    expect(find.byKey(const ValueKey('drum-deck')), findsOneWidget);
+    expect(find.byKey(const ValueKey('looper-deck')), findsOneWidget);
+    expect(find.byKey(const ValueKey('effects-board')), findsOneWidget);
+    await reveal(tester, find.text('开始伴奏'));
+    await tester.tap(find.text('开始伴奏'));
+    await tester.pump();
+    final pattern = audio.pattern;
+    final drumVolume = find.byKey(const ValueKey('drum-volume'));
+    await reveal(tester, drumVolume);
+    await tester.drag(drumVolume, const Offset(-90, 0));
+    await tester.pump();
+    final drumGain = audio.gain;
+    expect(drumGain, lessThan(1));
+    expect(audio.playing, isTrue);
+    expect(audio.pattern, same(pattern));
+    expect(c.playbackGain, 1);
+    expect(effects.gain, 0.5);
+    final loopVolume = find.byKey(const ValueKey('loop-volume'));
+    await reveal(tester, loopVolume);
+    await tester.tap(loopVolume);
+    await tester.pump();
+    expect(c.playbackGain, greaterThan(1));
+    expect(audio.gain, drumGain);
+    expect(effects.gain, 0.5);
+    final effectsVolume = find.byKey(const ValueKey('effects-volume'));
+    await reveal(tester, effectsVolume);
+    await tester.drag(effectsVolume, const Offset(70, 0));
+    await tester.pump();
+    expect(effects.gain, greaterThan(0.5));
+    expect(audio.gain, drumGain);
+    expect(audio.playing, isTrue);
+    expect(c.playbackGain, greaterThan(1));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    expect(effects.released, isTrue);
+    c.dispose();
+  });
+
+  testWidgets('device detection failure can recover without monitoring', (
+    tester,
+  ) async {
+    final effects = FakeEffects()..fail = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DrumsPage(audio: FakeDrumAudio(), effectsBackend: effects),
+      ),
+    );
+    await tester.pump();
+    expect(find.textContaining('测试设备中断'), findsOneWidget);
+    effects.fail = false;
+    await reveal(tester, find.text('重新检测'));
+    await tester.tap(find.text('重新检测'));
+    await tester.pump();
+    expect(find.textContaining('检测通过'), findsOneWidget);
+    expect(effects.running, isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('resizing keeps recording, monitoring and drum volume', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final effects = FakeEffects();
+    final audio = FakeDrumAudio();
+    final c = LooperController(FakeInput(), FakeOutput.new);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DrumsPage(
+          audio: audio,
+          effectsBackend: effects,
+          looperController: c,
+        ),
+      ),
+    );
+    await tester.pump();
+    await reveal(tester, find.text('开始伴奏'));
+    await tester.tap(find.text('开始伴奏'));
+    await tester.pump();
+    tester.widget<Slider>(find.byKey(const ValueKey('drum-volume'))).onChanged!(
+      0.4,
+    );
     c.mainPedal();
     await tester.pump();
-    expect(find.text('Looper · 录音中'), findsOneWidget);
+    await reveal(tester, find.text('开始监听'));
+    await tester.tap(find.text('开始监听'));
+    await tester.pump();
+    tester.view.physicalSize = const Size(390, 720);
+    await tester.pump();
+    expect(c.recording, isTrue);
+    expect(effects.running, isTrue);
+    expect(audio.playing, isTrue);
+    expect(audio.gain, 0.4);
+    expect(effects.calls.where((c) => c == 'probe'), hasLength(1));
+    expect(effects.calls.where((c) => c == 'start'), hasLength(1));
+    expect(find.byTooltip('麦克风采集中，非录音时丢弃输入'), findsOneWidget);
+    tester.view.physicalSize = const Size(1280, 720);
+    await tester.pump();
+    expect(c.recording, isTrue);
     expect(tester.takeException(), isNull);
     c.stop();
     await tester.pump();
     await tester.pumpWidget(const SizedBox());
     c.dispose();
-    await tester.pump();
   });
 
   testWidgets(
-    'compact desktop, short phone and landscape keep controls on one screen',
+    'all three tools remain reachable on small screens and large text',
     (tester) async {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -103,155 +161,101 @@ void main() {
         const Size(1024, 600),
         const Size(390, 720),
         const Size(844, 390),
+        const Size(320, 568),
       ]) {
         tester.view.physicalSize = size;
-        final c = LooperController(FakeInput(), FakeOutput.new);
+        final effects = UnsupportedEffects();
         await tester.pumpWidget(
           MaterialApp(
-            home: DrumsPage(audio: FakeDrumAudio(), looperController: c),
+            home: MediaQuery(
+              data: MediaQueryData(
+                textScaler: TextScaler.linear(size.width == 320 ? 2 : 1),
+              ),
+              child: DrumsPage(audio: FakeDrumAudio(), effectsBackend: effects),
+            ),
           ),
         );
         await tester.pump();
-        final scroll = tester.state<ScrollableState>(
-          find
-              .descendant(
-                of: find.byKey(const ValueKey('jam-workspace-scroll')),
-                matching: find.byType(Scrollable),
-              )
-              .first,
-        );
-        expect(scroll.position.maxScrollExtent, 0, reason: 'drums at $size');
-        expect(find.text('开始伴奏').hitTestable(), findsOneWidget);
-        await tester.tap(find.text('开始伴奏'));
-        await tester.pump();
-        expect(
-          scroll.position.maxScrollExtent,
-          0,
-          reason: 'playing drums at $size',
-        );
-        c.mainPedal();
-        await tester.pump();
-        expect(
-          scroll.position.maxScrollExtent,
-          0,
-          reason: 'recording with drums at $size',
-        );
-        if (size.width < 1050) {
-          await tester.tap(find.byKey(const ValueKey('jam-tab-looper')));
-          await tester.pump();
+        for (final key in ['drum-volume', 'loop-volume', 'effects-volume']) {
+          final control = find.byKey(ValueKey(key));
+          await reveal(tester, control);
+          expect(
+            control.hitTestable(),
+            findsOneWidget,
+            reason: '$key at $size',
+          );
         }
-        expect(scroll.position.maxScrollExtent, 0, reason: 'looper at $size');
-        expect(
-          find.byKey(const ValueKey('loop-main')).hitTestable(),
-          findsOneWidget,
-        );
-        expect(tester.takeException(), isNull);
+        expect(find.text('此功能目前仅面向 Linux 和 Windows 桌面。'), findsOneWidget);
+        expect(effects.calls, isEmpty);
+        expect(tester.takeException(), isNull, reason: '$size');
         await tester.pumpWidget(const SizedBox());
-        c.dispose();
-        await tester.pump();
       }
     },
   );
 
-  testWidgets(
-    'desktop workspace shows both decks and every step without scrolling',
-    (tester) async {
-      tester.view.physicalSize = const Size(1280, 720);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(
-        MaterialApp(home: DrumsPage(audio: FakeDrumAudio())),
-      );
-      expect(
-        find.byKey(const ValueKey('loop-main')).hitTestable(),
-        findsOneWidget,
-      );
-      expect(find.text('开始伴奏').hitTestable(), findsOneWidget);
-      expect(find.bySemanticsLabel('底鼓 第 16 步').hitTestable(), findsOneWidget);
-      final scroll = tester.state<ScrollableState>(
-        find
-            .descendant(
-              of: find.byKey(const ValueKey('jam-workspace-scroll')),
-              matching: find.byType(Scrollable),
-            )
-            .first,
-      );
-      expect(scroll.position.maxScrollExtent, 0);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-      await tester.pump();
-    },
-  );
+  testWidgets('phone drum paging and swing survive resize with recording', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(844, 390);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final c = LooperController(FakeInput(), FakeOutput.new);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DrumsPage(
+          audio: FakeDrumAudio(),
+          effectsBackend: UnsupportedEffects(),
+          looperController: c,
+        ),
+      ),
+    );
+    await tester.tap(find.text('摇摆 0%'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(Slider),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('完成'));
+    await tester.pumpAndSettle();
+    tester.view.physicalSize = const Size(390, 720);
+    await tester.pump();
+    expect(find.text('摇摆 30%'), findsOneWidget);
+    await reveal(tester, find.byKey(const ValueKey('drum-page-3')));
+    await tester.tap(find.byKey(const ValueKey('drum-page-3')));
+    await tester.pump();
+    expect(find.bySemanticsLabel('底鼓 第 16 步'), findsOneWidget);
+    await reveal(tester, find.byKey(const ValueKey('loop-main')));
+    await tester.tap(find.byKey(const ValueKey('loop-main')));
+    await tester.pump();
+    expect(c.recording, isTrue);
+    expect(tester.takeException(), isNull);
+    c.stop();
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
 
   testWidgets(
-    'phone pages drum beats without horizontal scrolling and keeps loop across tabs and resize',
+    'settings dialog learns keys without recording from ordinary shortcuts',
     (tester) async {
-      tester.view.physicalSize = const Size(390, 844);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
       final c = LooperController(FakeInput(), FakeOutput.new);
       await tester.pumpWidget(
         MaterialApp(
-          home: DrumsPage(audio: FakeDrumAudio(), looperController: c),
+          home: DrumsPage(
+            audio: FakeDrumAudio(),
+            effectsBackend: UnsupportedEffects(),
+            looperController: c,
+          ),
         ),
       );
-      final workspace = tester.state<ScrollableState>(
-        find
-            .descendant(
-              of: find.byKey(const ValueKey('jam-workspace-scroll')),
-              matching: find.byType(Scrollable),
-            )
-            .first,
-      );
-      expect(workspace.position.maxScrollExtent, 0);
-      await tester.tap(find.byKey(const ValueKey('drum-page-3')));
-      await tester.pump();
-      expect(find.bySemanticsLabel('底鼓 第 16 步').hitTestable(), findsOneWidget);
-      await tester.tap(find.text('Looper'));
-      await tester.pump();
-      expect(workspace.position.maxScrollExtent, 0);
-      await tester.sendKeyEvent(LogicalKeyboardKey.space);
-      await tester.pump();
-      expect(c.recording, isTrue);
-      await tester.tap(find.text('鼓机'));
-      await tester.pump();
-      expect(c.recording, isTrue);
-      expect(find.byTooltip('麦克风采集中，非录音时丢弃输入'), findsOneWidget);
-      tester.view.physicalSize = const Size(1280, 720);
-      await tester.pump();
-      expect(c.recording, isTrue);
-      expect(
-        find.byKey(const ValueKey('loop-main')).hitTestable(),
-        findsOneWidget,
-      );
-      c.stop();
-      await tester.pump();
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-      c.dispose();
-      await tester.pump();
-    },
-  );
-
-  testWidgets(
-    'settings dialog learns keys while protecting recording from ordinary shortcuts',
-    (tester) async {
-      final c = LooperController(FakeInput(), FakeOutput.new);
-      tester.view.physicalSize = const Size(1280, 720);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: DrumsPage(audio: FakeDrumAudio(), looperController: c),
-        ),
-      );
+      await reveal(tester, find.byTooltip('踏板绑定与录音设置'));
       await tester.tap(find.byTooltip('踏板绑定与录音设置'));
       await tester.pumpAndSettle();
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
-      await tester.pump();
       expect(c.recording, isFalse);
       await tester.tap(find.text('绑定键盘：SPACE'));
       await tester.pump();
@@ -263,12 +267,11 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.keyQ);
       await tester.pump();
       expect(c.recording, isTrue);
-      expect(tester.takeException(), isNull);
       c.stop();
       await tester.pump();
+      expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
-      await tester.pump();
     },
   );
 }

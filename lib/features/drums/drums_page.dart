@@ -1,6 +1,8 @@
 import '../../app/theme.dart';
 import 'package:flutter/material.dart';
 
+import '../effects/effects_page.dart';
+import '../effects/effects_backend.dart';
 import '../looper/looper_panel.dart';
 import '../looper/looper_controller.dart';
 import '../metronome/metronome_audio.dart';
@@ -9,7 +11,13 @@ import '../metronome/metronome_controller.dart';
 import 'drum_pattern.dart';
 
 class DrumsPage extends StatefulWidget {
-  const DrumsPage({super.key, this.audio, this.looperController});
+  const DrumsPage({
+    super.key,
+    this.audio,
+    this.looperController,
+    this.effectsBackend,
+  });
+  final EffectsBackend? effectsBackend;
   final LooperController? looperController;
   final MetronomeAudio? audio;
 
@@ -24,9 +32,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
   List<List<bool>> _hits = [];
   final _muted = [false, false, false];
   int _swing = 0;
-  int _tab = 0;
   bool _capturing = false;
-  String _loopActivity = '';
   int _stepPage = 0;
   String _preset = '摇滚';
 
@@ -102,7 +108,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                       child: Text(
                         '先选一个鼓机律动，点击开始伴奏；再用 Looper 录下吉他并逐层叠录。\n\n'
                         '点击鼓件名称可静音，点击格子编辑十六分音符。修改鼓机参数会从首拍重启。窄屏用拍号分页查看全部鼓点。\n\n'
-                        '录音与鼓机独立循环，不自动对拍。请用耳机或声卡直通监听，避免伴奏串入录音。\n\n'
+                        '录音与鼓机独立循环，不自动对拍。下方效果器会静音检测引擎和声卡，手动开始监听；鼓机音量、Looper 回放音量与效果器输出音量可独立调节。Looper 仍录原始输入，设备能否同时使用取决于驱动。请用耳机避免伴奏串入录音。\n\n'
                         '进入后台会停止播放与采集；离开工作台清空录音和设置。声音受系统音量影响，蓝牙可能增加延迟。',
                       ),
                     ),
@@ -123,12 +129,9 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                 final wide =
                     constraints.maxWidth >= 1050 &&
                     MediaQuery.textScalerOf(context).scale(14) <= 21;
-                final normalText =
-                    MediaQuery.textScalerOf(context).scale(14) <= 18;
                 final compact =
-                    normalText &&
-                    (constraints.maxHeight < 620 ||
-                        (!wide && constraints.maxHeight < 740));
+                    MediaQuery.textScalerOf(context).scale(14) <= 18 &&
+                    constraints.maxHeight < 740;
                 final landscape =
                     compact &&
                     constraints.maxHeight < 400 &&
@@ -144,11 +147,6 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                   controller: widget.looperController,
                   compact: compact,
                   landscape: landscape,
-                  onActivityChanged: (activity) {
-                    if (_loopActivity != activity) {
-                      setState(() => _loopActivity = activity);
-                    }
-                  },
                   onCaptureChanged: (capturing) {
                     if (_capturing != capturing) {
                       setState(() => _capturing = capturing);
@@ -157,56 +155,13 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                 );
                 return SingleChildScrollView(
                   key: const ValueKey('jam-workspace-scroll'),
-                  padding: EdgeInsets.fromLTRB(
-                    16,
-                    compact ? 0 : 8,
-                    16,
-                    compact ? 8 : 16,
-                  ),
+                  padding: const EdgeInsets.all(16),
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 1440),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          if (!wide) ...[
-                            SegmentedButton<int>(
-                              segments: [
-                                ButtonSegment(
-                                  value: 0,
-                                  tooltip: _controller.running
-                                      ? '鼓机 · 播放中'
-                                      : '鼓机',
-                                  icon: Icon(Icons.grid_on),
-                                  label: Text(
-                                    _controller.running ? '鼓机 · 播放中' : '鼓机',
-                                    key: const ValueKey('jam-tab-drums'),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                ButtonSegment(
-                                  value: 1,
-                                  tooltip: _loopActivity.isEmpty
-                                      ? 'Looper'
-                                      : 'Looper · $_loopActivity',
-                                  icon: Icon(Icons.all_inclusive),
-                                  label: Text(
-                                    _loopActivity.isEmpty
-                                        ? 'Looper'
-                                        : 'Looper · $_loopActivity',
-                                    key: const ValueKey('jam-tab-looper'),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                              selected: {_tab},
-                              onSelectionChanged: (v) =>
-                                  setState(() => _tab = v.single),
-                            ),
-                            SizedBox(height: compact ? 6 : 12),
-                          ],
                           if (wide)
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -216,15 +171,17 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                                 Expanded(child: drum),
                               ],
                             )
-                          else
-                            // Offstage preserves the audio session without letting a taller hidden panel
-                            // force the visible tab to scroll.
-                            Column(
-                              children: [
-                                Offstage(offstage: _tab != 0, child: drum),
-                                Offstage(offstage: _tab != 1, child: loop),
-                              ],
-                            ),
+                          else ...[
+                            drum,
+                            const SizedBox(height: 16),
+                            loop,
+                          ],
+                          const SizedBox(height: 16),
+                          EffectsPage(
+                            key: const ValueKey('jam-effects'),
+                            embedded: true,
+                            backend: widget.effectsBackend,
+                          ),
                         ],
                       ),
                     ),
@@ -237,6 +194,21 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
       ),
     );
   }
+
+  Widget _drumVolume() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text('鼓机音量 ${(_controller.volume * 100).round()}%'),
+      Slider(
+        key: const ValueKey('drum-volume'),
+        value: _controller.volume,
+        divisions: 100,
+        label: '${(_controller.volume * 100).round()}%',
+        semanticFormatterCallback: (value) => '鼓机音量 ${(value * 100).round()}%',
+        onChanged: _controller.setVolume,
+      ),
+    ],
+  );
 
   Widget _drumDeck(BuildContext context, {bool compact = false}) {
     final c = _controller;
@@ -340,6 +312,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
             },
           ),
           SizedBox(height: compact ? 4 : 8),
+          _drumVolume(),
           _grid(context, compact: compact),
           SizedBox(height: compact ? 6 : 16),
           Row(
@@ -472,6 +445,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
             ],
           ),
           const SizedBox(height: 6),
+          _drumVolume(),
           _grid(context, compact: true),
           const SizedBox(height: 6),
           Text(

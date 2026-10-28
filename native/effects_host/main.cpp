@@ -40,7 +40,25 @@ public:
 
     var command(const var& request) {
         auto action = request["command"].toString();
-        if (action == "settings") {
+        if (action == "probe") {
+            // Open with monitoring disabled, then release the device even on failure.
+            if (enabled) return status();
+            try {
+                ensureDevice();
+                auto* device = devices.getCurrentAudioDevice();
+                if (device == nullptr || device->getActiveInputChannels().isZero()
+                    || device->getActiveOutputChannels().countNumberOfSetBits() < 2)
+                    throw String::fromUTF8("需要有效的音频输入和立体声输出，请检查声卡与系统权限。");
+                auto result = status();
+                devices.closeAudioDevice();
+                result.getDynamicObject()->setProperty("audioOpen", false);
+                result.getDynamicObject()->setProperty("available", true);
+                return result;
+            } catch (...) {
+                devices.closeAudioDevice();
+                throw;
+            }
+        } else if (action == "settings") {
             ensureDevice();
             if (!settings) {
                 settings = std::make_unique<EditorWindow>(String::fromUTF8("Audio devices / 输入输出设备"),
@@ -85,7 +103,6 @@ public:
             devices.closeAudioDevice();
             inputPeak = outputPeak = 0;
         } else if (action == "builtin") {
-            if (enabled) throw String::fromUTF8("请先停止监听，再修改效果链。");
             if (chain.size() >= 8) throw String::fromUTF8("最多添加 8 个效果器。");
             auto plugin = std::make_unique<BuiltinEffect>(request["kind"].toString());
             plugin->setRateAndBufferSizeDetails(rate, block);
@@ -99,7 +116,6 @@ public:
             if (builtin == nullptr) throw String::fromUTF8("请在 VST3 参数窗口调节此插件。");
             builtin->setParameterValue(static_cast<int>(request["parameter"]), static_cast<float>(request["value"]));
         } else if (action == "load") {
-            if (enabled) throw String::fromUTF8("请先停止监听，再修改效果链。");
             if (chain.size() >= 8) throw String::fromUTF8("第一版最多加载 8 个效果器。");
             auto path = request["path"].toString();
             if (!File::isAbsolutePath(path)) throw String::fromUTF8("请输入插件的绝对路径。");
@@ -144,9 +160,13 @@ public:
                 item.editor->setVisible(true);
                 item.editor->toFront(true);
             } else {
-                if (enabled && action != "bypass") throw String::fromUTF8("请先停止监听，再修改效果链。");
+                // Destroy removed plugin/editor after releasing the chain lock.
+                Effect removed;
                 const ScopedLock lock(chainLock);
-                if (action == "remove") chain.erase(chain.begin() + index);
+                if (action == "remove") {
+                    removed = std::move(chain[static_cast<size_t>(index)]);
+                    chain.erase(chain.begin() + index);
+                }
                 else if (action == "bypass") chain[static_cast<size_t>(index)].bypass = static_cast<bool>(request["value"]);
                 else {
                     int destination = request["destination"];
@@ -173,7 +193,6 @@ public:
         auto check = [&](float expected) {
             enabled = true;
             audioDeviceIOCallbackWithContext(inputs, 2, outputs, 3, block, {});
-            enabled = false;
             for (int i = 0; i < block; ++i)
                 if (std::abs(left[static_cast<size_t>(i)] - expected) > 0.00001f
                     || std::abs(right[static_cast<size_t>(i)] - expected) > 0.00001f)
@@ -199,6 +218,7 @@ public:
 
     void testBuiltinChain() {
         testBuiltinDsp();
+        enabled = true; // Exercise structural commands while monitoring is enabled.
         command(object({{"command", "builtin"}, {"kind", "compressor"}}));
         command(object({{"command", "builtin"}, {"kind", "fuzz"}}));
         auto render = [&] {
@@ -213,7 +233,6 @@ public:
                     input[static_cast<size_t>(i)] = 0.5f * std::sin(static_cast<float>((iteration * block + i) * 2 * MathConstants<double>::pi * 220 / rate));
                 audioDeviceIOCallbackWithContext(inputs, 1, outputs, 2, block, {});
             }
-            enabled = false;
             double energy = 0;
             for (float sample : left) energy += sample * sample;
             return energy;
@@ -227,6 +246,8 @@ public:
         const double bypassed = render();
         command(object({{"command", "remove"}, {"index", 0}}));
         if (std::abs(render() - bypassed) > 0.0001) throw String("Bypass did not match the empty chain");
+        if (!enabled) throw String("Live edits stopped monitoring");
+        enabled = false;
         std::cout << "Editable built-in chain audio tests passed" << std::endl;
     }
 
