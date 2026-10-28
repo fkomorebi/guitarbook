@@ -7,6 +7,7 @@ import '../metronome/metronome_audio.dart';
 import '../metronome/metronome_pattern.dart';
 import 'loop_audio.dart';
 import 'loop_samples.dart';
+import 'smart_loop_take.dart';
 
 class _Layer {
   _Layer(this.samples, this.audio);
@@ -24,6 +25,24 @@ class LooperController extends ChangeNotifier {
   final Stopwatch _lastInput = Stopwatch();
   Future<void> _queue = Future.value();
   LoopTake? _take;
+  SmartLoopTake? _smartTake;
+  bool smartEnabled = false;
+  double smartThresholdDb = -45;
+
+  void setSmartEnabled(bool enabled) {
+    if (_disposed || capturing || busy || layers > 0) return;
+    smartEnabled = enabled;
+    _notify();
+  }
+
+  void setSmartThreshold(double db) {
+    if (_disposed || capturing || busy || !db.isFinite) return;
+    smartThresholdDb = db.clamp(-60, -20);
+    _notify();
+  }
+
+  bool get smartWaiting => _smartTake != null && !_smartTake!.started;
+  bool get smartCalibrating => _smartTake?.calibrating ?? false;
   PositionedLoopAudio? _armedAudio;
   int? _takeOffset;
   int _generation = 0;
@@ -54,11 +73,12 @@ class LooperController extends ChangeNotifier {
 
   LoopInputMeter inputMeter = LoopInputMeter();
 
-  bool get recording => _take != null;
+  bool get recording => _take != null || _smartTake != null;
   int get layers => _layers.length;
   int get frames => _layers.isEmpty ? 0 : _layers.first.samples.length;
   double get seconds => frames / loopSampleRate;
-  double get recordedSeconds => (_take?.count ?? 0) / loopSampleRate;
+  double get recordedSeconds =>
+      _smartTake?.seconds ?? (_take?.count ?? 0) / loopSampleRate;
   Duration get position => _layers.isEmpty || !playing
       ? Duration.zero
       : _layers.first.audio.position;
@@ -127,6 +147,18 @@ class LooperController extends ChangeNotifier {
         if (!_current(generation)) return;
         if (bytes.isNotEmpty) _lastInput.reset();
         inputMeter.add(bytes);
+        final smart = _smartTake;
+        if (smart != null) {
+          smart.add(bytes);
+          if (smart.done && !busy) {
+            if (smart.timedOut) {
+              _inputFailed('30 秒内未检测到持续演奏，请调低触发门槛或检查输入后重试。');
+            } else {
+              mainPedal();
+            }
+          }
+          return;
+        }
         final take = _take;
         if (take == null) return;
         try {
@@ -179,14 +211,25 @@ class LooperController extends ChangeNotifier {
   void mainPedal() {
     if (_disposed || busy) return;
     if (recording) {
-      final take = _take!;
-      if (take.count < loopSampleRate * .3) {
+      final smart = _smartTake;
+      if (smart != null && !smart.started) {
+        stop();
+        return;
+      }
+      final take = smart?.take ?? _take!;
+      final retained = smart?.trimmedFrames ?? take.count;
+      if (retained < loopSampleRate * .3) {
+        if (smart != null) {
+          _inputFailed('有效琴声不足 0.3 秒，请重新录音。');
+          return;
+        }
         error = '录音至少需要 0.3 秒，请继续演奏后再踩一次。';
         _notify();
         return;
       }
       _take = null;
-      final length = frames == 0 ? take.count : frames;
+      _smartTake = null;
+      final length = frames == 0 ? retained : frames;
       final samples = take.finish(length: length, offset: _takeOffset ?? 0);
       final audio = _armedAudio!;
       _armedAudio = null;
@@ -238,7 +281,11 @@ class LooperController extends ChangeNotifier {
         if (!_current(generation)) return;
         await _capture(generation);
         if (!_current(generation) || !capturing) return;
-        _take = LoopTake(frames == 0 ? maxLoopFrames : frames);
+        if (smartEnabled && frames == 0) {
+          _smartTake = SmartLoopTake(thresholdDb: smartThresholdDb);
+        } else {
+          _take = LoopTake(frames == 0 ? maxLoopFrames : frames);
+        }
         _takeOffset = null;
       });
     }
@@ -272,6 +319,7 @@ class LooperController extends ChangeNotifier {
     if (_disposed) return;
     ++_generation;
     _take = null;
+    _smartTake = null;
     playing = false;
     capturing = false;
     busy = false;

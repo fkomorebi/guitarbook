@@ -101,6 +101,123 @@ class FakeOutput implements PositionedLoopAudio {
 }
 
 void main() {
+  test(
+    'smart first layer auto finishes, overdubs retain full loop length',
+    () async {
+      final input = FakeInput();
+      final output = <FakeOutput>[];
+      final c = LooperController(input, () {
+        final audio = FakeOutput();
+        output.add(audio);
+        return audio;
+      });
+      c.setSmartEnabled(true);
+      c.mainPedal();
+      await c.settled;
+      expect(c.smartWaiting, isTrue);
+      input.stream!.add(Uint8List(loopSampleRate)); // Half second calibration.
+      input.emit(loopSampleRate);
+      input.stream!.add(Uint8List(loopSampleRate * 4));
+      await Future<void>.delayed(Duration.zero);
+      await c.settled;
+      expect(c.layers, 1);
+      expect(c.playing, isTrue);
+      expect(c.seconds, closeTo(1.13, .02));
+      c.mainPedal();
+      await c.settled;
+      expect(c.smartWaiting, isFalse);
+      input.emit(c.frames);
+      await Future<void>.delayed(Duration.zero);
+      await c.settled;
+      expect(c.layers, 2);
+      expect(output.last.pattern!.samples.length, c.frames);
+      c.dispose();
+      await c.settled;
+    },
+  );
+
+  test(
+    'smart waiting cancel and stop during output preparation release audio',
+    () async {
+      final input = FakeInput();
+      final output = <FakeOutput>[];
+      final c = LooperController(input, () {
+        final audio = FakeOutput();
+        output.add(audio);
+        return audio;
+      });
+      c.setSmartEnabled(true);
+      c.mainPedal();
+      await c.settled;
+      c.mainPedal(); // Cancel while waiting.
+      await c.settled;
+      expect(c.capturing, isFalse);
+      expect(c.layers, 0);
+      expect(output.single.disposed, isTrue);
+      c.mainPedal();
+      await c.settled;
+      final loading = Completer<void>();
+      output.last.loading = loading;
+      input.stream!.add(Uint8List(loopSampleRate));
+      input.emit(loopSampleRate);
+      input.stream!.add(Uint8List(loopSampleRate * 4));
+      await Future<void>.delayed(Duration.zero);
+      c.stop();
+      loading.complete();
+      await c.settled;
+      expect(c.layers, 0);
+      expect(output.last.disposed, isTrue);
+      c.dispose();
+      await c.settled;
+    },
+  );
+
+  testWidgets(
+    'smart toggle, waiting status and sensitivity work at large text',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final c = LooperController(FakeInput(), FakeOutput.new);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MediaQuery(
+              data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+              child: SingleChildScrollView(child: LooperPanel(controller: c)),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pump();
+      expect(c.smartEnabled, isTrue);
+      c.mainPedal();
+      await tester.pump();
+      expect(find.text('检测底噪 · 请安静半秒'), findsOneWidget);
+      expect(find.text('取消等待'), findsWidgets);
+      expect(
+        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).onChanged,
+        isNull,
+      );
+      c.stop();
+      await tester.pump();
+      await tester.ensureVisible(find.byTooltip('踏板绑定与录音设置'));
+      await tester.tap(find.byTooltip('踏板绑定与录音设置'));
+      await tester.pumpAndSettle();
+      final slider = find.byKey(const ValueKey('smart-threshold'));
+      await tester.ensureVisible(slider);
+      await tester.drag(slider, const Offset(40, 0));
+      await tester.pump();
+      expect(c.smartThresholdDb, greaterThan(-45));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+      await tester.pump();
+    },
+  );
+
   test('input meter detects silence, split PCM and signal recovery', () {
     final meter = LoopInputMeter();
     meter.add(Uint8List(loopSampleRate * 3 * 2));

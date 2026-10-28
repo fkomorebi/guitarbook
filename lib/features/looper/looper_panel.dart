@@ -50,7 +50,7 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
       widget.onCaptureChanged?.call(_c.capturing);
       widget.onActivityChanged?.call(
         _c.recording
-            ? '录音中'
+            ? (_c.smartWaiting ? '等待琴声' : '录音中')
             : _c.playing
             ? '循环中'
             : '',
@@ -120,6 +120,8 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
 
   String get _status => _c.busy
       ? '正在准备音频…'
+      : _c.smartWaiting
+      ? (_c.smartCalibrating ? '检测底噪 · 请安静半秒' : '等待琴声 · 弹奏后自动录音')
       : _c.recording
       ? '${_c.layers == 0 ? '首层录音' : '叠录中'} · ${_c.recordedSeconds.toStringAsFixed(1)} 秒'
       : _c.playing
@@ -188,12 +190,16 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
     }
   }
 
-  String get _mainLabel => _c.recording
+  String get _mainLabel => _c.smartWaiting
+      ? '取消等待'
+      : _c.recording
       ? '结束录音并循环'
       : _c.playing
       ? '开始叠录'
       : _c.layers > 0
       ? '恢复循环'
+      : _c.smartEnabled
+      ? '智能录制第一层'
       : '录制第一层';
 
   @override
@@ -473,6 +479,20 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           title,
+          Material(
+            type: MaterialType.transparency,
+            child: SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('智能录音'),
+              subtitle: Text(
+                _c.smartEnabled ? '首层自动起录 · 停奏 2 秒后裁剪并循环' : '无需踩钉，自动裁剪首尾空白',
+              ),
+              value: _c.smartEnabled,
+              onChanged: _c.capturing || _c.busy || _c.layers > 0
+                  ? null
+                  : _c.setSmartEnabled,
+            ),
+          ),
           if (widget.landscape)
             Row(
               children: [
@@ -605,6 +625,20 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
     const SizedBox(height: 8),
     const Text(
       '声卡直通监听有声不代表应用收到信号。请选择吉他连接的 Inst/Line 输入；Mic 是麦克风，Monitor/Loopback 是回环。切换设备前先停止循环。录音时主面板显示输入电平，持续低电平会提示检查。',
+    ),
+    const SizedBox(height: 12),
+    Text('智能录音触发门槛：${_c.smartThresholdDb.round()} dBFS'),
+    Slider(
+      key: const ValueKey('smart-threshold'),
+      value: _c.smartThresholdDb,
+      min: -60,
+      max: -20,
+      divisions: 40,
+      label: '${_c.smartThresholdDb.round()} dBFS',
+      onChanged: _c.capturing || _c.busy ? null : _c.setSmartThreshold,
+    ),
+    const Text(
+      '轻弹不触发可调低门槛，杂音误触发可调高。开始后请安静半秒；停奏 2 秒自动结束，段内停顿保留。仅首层生效，不自动对齐鼓机。不能分离人声或外放伴奏，请戴耳机或使用声卡直录。',
     ),
     const SizedBox(height: 12),
     Text('输入延迟补偿：${_c.compensationMs} ms'),

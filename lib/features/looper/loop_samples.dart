@@ -13,6 +13,10 @@ class LoopTake {
   int count = 0;
   int? _low;
 
+  void addSample(double sample) {
+    if (count < limit) _samples[count++] = sample;
+  }
+
   void add(Uint8List bytes) {
     for (final byte in bytes) {
       if (count == limit) return;
@@ -29,17 +33,18 @@ class LoopTake {
   Float32List finish({required int length, required int offset}) {
     final result = Float32List(length);
     var peak = 0.0;
-    for (var i = 0; i < count; i++) {
+    final retained = math.min(count, length);
+    for (var i = 0; i < retained; i++) {
       peak = math.max(peak, _samples[i].abs());
     }
     // Preserve ordinary instrument input; attenuate only loud takes.
     // Six layers still have at most .72 combined peak, leaving drum headroom.
     final gain = peak > .12 ? .12 / peak : 1.0;
-    final fade = math.min(240, count ~/ 2);
-    for (var i = 0; i < count; i++) {
+    final fade = math.min(240, retained ~/ 2);
+    for (var i = 0; i < retained; i++) {
       final envelope = fade == 0
           ? 1.0
-          : math.min(1.0, math.min(i, count - 1 - i) / fade);
+          : math.min(1.0, math.min(i, retained - 1 - i) / fade);
       result[(offset + i) % length] = _samples[i] * envelope * gain;
     }
     return result;
