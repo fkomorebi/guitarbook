@@ -185,7 +185,10 @@ void main() {
             reason: '$key at $size',
           );
         }
-        expect(find.text('此功能目前仅面向 Linux 和 Windows 桌面。'), findsOneWidget);
+        expect(
+          find.text('此功能支持 Android、iOS、Linux 和 Windows；当前平台暂不支持。'),
+          findsOneWidget,
+        );
         expect(effects.calls, isEmpty);
         expect(tester.takeException(), isNull, reason: '$size');
         await tester.pumpWidget(const SizedBox());

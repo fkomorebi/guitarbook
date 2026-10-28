@@ -16,6 +16,12 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
+		EC0000000000000000000000 /* GBEffectsChannel.mm in Sources */ = {isa = PBXBuildFile; fileRef = EB0000000000000000000000; };
+		EC0000000000000000000001 /* juce_core.mm in Sources */ = {isa = PBXBuildFile; fileRef = EB0000000000000000000001; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
+		EC0000000000000000000002 /* juce_events.mm in Sources */ = {isa = PBXBuildFile; fileRef = EB0000000000000000000002; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
+		EC0000000000000000000003 /* juce_audio_basics.mm in Sources */ = {isa = PBXBuildFile; fileRef = EB0000000000000000000003; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
+		EC0000000000000000000004 /* juce_audio_processors_headless.mm in Sources */ = {isa = PBXBuildFile; fileRef = EB0000000000000000000004; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
+		EC0000000000000000000005 /* juce_core_CompilationTime.mm in Sources */ = {isa = PBXBuildFile; fileRef = EB0000000000000000000005; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +65,12 @@
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		EB0000000000000000000000 /* GBEffectsChannel.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Runner/Effects/GBEffectsChannel.mm; sourceTree = SOURCE_ROOT; };
+		EB0000000000000000000001 /* juce_core.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Runner/Effects/juce_core.mm; sourceTree = SOURCE_ROOT; };
+		EB0000000000000000000002 /* juce_events.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Runner/Effects/juce_events.mm; sourceTree = SOURCE_ROOT; };
+		EB0000000000000000000003 /* juce_audio_basics.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Runner/Effects/juce_audio_basics.mm; sourceTree = SOURCE_ROOT; };
+		EB0000000000000000000004 /* juce_audio_processors_headless.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Runner/Effects/juce_audio_processors_headless.mm; sourceTree = SOURCE_ROOT; };
+		EB0000000000000000000005 /* juce_core_CompilationTime.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Runner/Effects/juce_core_CompilationTime.mm; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -96,6 +108,12 @@
 		97C146E51CF9000F007C117D = {
 			isa = PBXGroup;
 			children = (
+				EB0000000000000000000000 /* GBEffectsChannel.mm */,
+				EB0000000000000000000001 /* juce_core.mm */,
+				EB0000000000000000000002 /* juce_events.mm */,
+				EB0000000000000000000003 /* juce_audio_basics.mm */,
+				EB0000000000000000000004 /* juce_audio_processors_headless.mm */,
+				EB0000000000000000000005 /* juce_core_CompilationTime.mm */,
 				9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
@@ -152,6 +170,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 97C147051CF9000F007C117D /* Build configuration list for PBXNativeTarget "Runner" */;
 			buildPhases = (
+				ED0000000000000000000001 /* Prepare Effects */,
 				9740EEB61CF901F6004384FC /* Run Script */,
 				97C146EA1CF9000F007C117D /* Sources */,
 				97C146EB1CF9000F007C117D /* Frameworks */,
@@ -266,6 +285,18 @@
 			shellPath = /bin/sh;
 			shellScript = "/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" build";
 		};
+		ED0000000000000000000001 /* Prepare Effects */ = {
+            isa = PBXShellScriptBuildPhase;
+            alwaysOutOfDate = 1;
+            buildActionMask = 2147483647;
+            files = ();
+            inputPaths = ();
+            outputPaths = ();
+            name = "Prepare Effects";
+            runOnlyForDeploymentPostprocessing = 0;
+            shellPath = /bin/sh;
+            shellScript = "/bin/sh \"$SRCROOT/../tool/prepare_ios_effects.sh\"";
+        };
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -281,6 +312,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EC0000000000000000000000 /* GBEffectsChannel.mm in Sources */,
+				EC0000000000000000000001 /* juce_core.mm in Sources */,
+				EC0000000000000000000002 /* juce_events.mm in Sources */,
+				EC0000000000000000000003 /* juce_audio_basics.mm in Sources */,
+				EC0000000000000000000004 /* juce_audio_processors_headless.mm in Sources */,
+				EC0000000000000000000005 /* juce_core_CompilationTime.mm in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
@@ -385,6 +422,11 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.komorebi.guitarbook;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
+                HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../.dart_tool/guitarbook-native/JUCE-8.0.12/modules");
+                GCC_PREPROCESSOR_DEFINITIONS = ("$(inherited)", "JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1", "JUCE_MODULE_AVAILABLE_juce_core=1", "JUCE_MODULE_AVAILABLE_juce_events=1", "JUCE_MODULE_AVAILABLE_juce_audio_basics=1", "JUCE_MODULE_AVAILABLE_juce_audio_processors_headless=1", "JUCE_USE_CURL=0", "JUCE_WEB_BROWSER=0", "JUCE_PLUGINHOST_AU=0", "JUCE_PLUGINHOST_VST3=0", "JUCE_REPORT_APP_USAGE=0");
+                OTHER_LDFLAGS = ("$(inherited)", "-framework", AudioToolbox, "-framework", AVFoundation, "-framework", Accelerate, "-framework", Security, "-framework", Foundation, "-framework", UIKit, "-framework", MobileCoreServices, "-lz", "-liconv");
+                CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+                ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};
@@ -564,6 +606,11 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.komorebi.guitarbook;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
+                HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../.dart_tool/guitarbook-native/JUCE-8.0.12/modules");
+                GCC_PREPROCESSOR_DEFINITIONS = ("$(inherited)", "JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1", "JUCE_MODULE_AVAILABLE_juce_core=1", "JUCE_MODULE_AVAILABLE_juce_events=1", "JUCE_MODULE_AVAILABLE_juce_audio_basics=1", "JUCE_MODULE_AVAILABLE_juce_audio_processors_headless=1", "JUCE_USE_CURL=0", "JUCE_WEB_BROWSER=0", "JUCE_PLUGINHOST_AU=0", "JUCE_PLUGINHOST_VST3=0", "JUCE_REPORT_APP_USAGE=0");
+                OTHER_LDFLAGS = ("$(inherited)", "-framework", AudioToolbox, "-framework", AVFoundation, "-framework", Accelerate, "-framework", Security, "-framework", Foundation, "-framework", UIKit, "-framework", MobileCoreServices, "-lz", "-liconv");
+                CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+                ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -586,6 +633,11 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.komorebi.guitarbook;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
+                HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../.dart_tool/guitarbook-native/JUCE-8.0.12/modules");
+                GCC_PREPROCESSOR_DEFINITIONS = ("$(inherited)", "JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1", "JUCE_MODULE_AVAILABLE_juce_core=1", "JUCE_MODULE_AVAILABLE_juce_events=1", "JUCE_MODULE_AVAILABLE_juce_audio_basics=1", "JUCE_MODULE_AVAILABLE_juce_audio_processors_headless=1", "JUCE_USE_CURL=0", "JUCE_WEB_BROWSER=0", "JUCE_PLUGINHOST_AU=0", "JUCE_PLUGINHOST_VST3=0", "JUCE_REPORT_APP_USAGE=0");
+                OTHER_LDFLAGS = ("$(inherited)", "-framework", AudioToolbox, "-framework", AVFoundation, "-framework", Accelerate, "-framework", Security, "-framework", Foundation, "-framework", UIKit, "-framework", MobileCoreServices, "-lz", "-liconv");
+                CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+                ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};

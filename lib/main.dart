@@ -10,6 +10,14 @@ void main() {
       'assets/fonts/OFL-NotoSerif.txt',
     );
     yield LicenseEntryWithLineBreaks(['Noto Serif'], license);
+    for (final dependency in [
+      ('JUCE', 'assets/licenses/JUCE-LICENSE.md'),
+      ('Oboe', 'assets/licenses/Oboe-LICENSE.txt'),
+    ]) {
+      yield LicenseEntryWithLineBreaks([
+        dependency.$1,
+      ], await rootBundle.loadString(dependency.$2));
+    }
   });
   runApp(const GuitarbookApp());
 }

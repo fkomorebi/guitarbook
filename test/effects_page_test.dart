@@ -138,7 +138,67 @@ class FakeEffects extends EffectsBackend {
   }
 }
 
+class MobileEffects extends FakeEffects {
+  @override
+  bool get mobile => true;
+  @override
+  bool get supportsVst3 => false;
+  @override
+  bool get supportsDeviceSettings => false;
+  @override
+  Future<Map<String, dynamic>> send(
+    String command, [
+    Map<String, dynamic> arguments = const {},
+  ]) async => {
+    ...await super.send(command, arguments),
+    'latencyAvailable': false,
+    'cpuAvailable': false,
+    'outputBufferFrames': 192,
+  };
+}
+
 void main() {
+  testWidgets(
+    'mobile keeps builtins and wet workbench, hides desktop controls',
+    (tester) async {
+      tester.view.physicalSize = const Size(640, 1136);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final backend = MobileEffects();
+      await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+      await tester.pumpAndSettle();
+      expect(backend.calls.first, 'start');
+      expect(find.text('声卡与输入通道'), findsNothing);
+      expect(find.text('外部 VST3 插件'), findsNothing);
+      await tester.scrollUntilVisible(find.text('美式清音箱头'), 200);
+      await tester.ensureVisible(find.text('美式清音箱头'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('美式清音箱头'));
+      await tester.pumpAndSettle();
+      expect(backend.plugins.single['kind'], 'amp_clean');
+      final scroll = tester.state<ScrollableState>(
+        find
+            .descendant(
+              of: find.byType(ListView),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      scroll.position.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('声卡设置与延迟诊断'));
+      await tester.tap(find.text('声卡设置与延迟诊断'));
+      await tester.pumpAndSettle();
+      scroll.position.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('不提供可靠的驱动延迟报告'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      expect(backend.released, true);
+    },
+  );
+
   testWidgets('四种箱头可添加，窄屏大字号六旋钮独立调参与旁通', (tester) async {
     tester.view.physicalSize = const Size(320, 568);
     tester.view.devicePixelRatio = 1;

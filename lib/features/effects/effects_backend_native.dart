@@ -2,9 +2,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-/// Control, meters and bounded Looper PCM blocks share this local pipe.
+import 'effects_mobile_transport.dart';
+
+/// Controls, meters and bounded Looper PCM use a mobile channel or desktop pipe.
 class EffectsBackend {
-  bool get supported => Platform.isLinux || Platform.isWindows;
+  bool get mobile => Platform.isAndroid || Platform.isIOS;
+  bool get supported => mobile || Platform.isLinux || Platform.isWindows;
+  bool get supportsVst3 => !mobile;
+  bool get supportsDeviceSettings => !mobile;
+  EffectsMobileTransport? _mobileTransport;
   Process? _process;
   Future<void>? _launching;
   int _nextId = 0;
@@ -13,7 +19,7 @@ class EffectsBackend {
   final _pending = <int, Completer<Map<String, dynamic>>>{};
 
   Future<void> _launch() async {
-    if (!supported) throw UnsupportedError('实时效果器目前仅支持 Linux 和 Windows。');
+    if (!supported) throw UnsupportedError('此平台暂不支持实时效果器。');
     if (_disposed) throw StateError('效果器已关闭。');
     if (_process != null) return;
     final separator = Platform.pathSeparator;
@@ -77,6 +83,13 @@ class EffectsBackend {
     String command, [
     Map<String, dynamic> arguments = const {},
   ]) async {
+    if (_disposed) throw StateError('效果器已关闭。');
+    if (mobile) {
+      return (_mobileTransport ??= EffectsMobileTransport()).send(
+        command,
+        arguments,
+      );
+    }
     // Surface an idle-time plugin crash before a status poll can silently
     // replace the lost chain with a freshly launched empty host.
     if (command == 'status' && _exitError != null) {
@@ -111,6 +124,10 @@ class EffectsBackend {
 
   Future<void> dispose() async {
     _disposed = true;
+    if (mobile) {
+      await _mobileTransport?.dispose();
+      return;
+    }
     final process = _process;
     _process = null;
     _fail(StateError('效果器已关闭。'));

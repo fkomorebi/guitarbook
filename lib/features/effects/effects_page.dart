@@ -217,18 +217,25 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
             ],
             if (!supported) ...[
               const SizedBox(height: 16),
-              const Text('此功能目前仅面向 Linux 和 Windows 桌面。'),
+              const Text('此功能支持 Android、iOS、Linux 和 Windows；当前平台暂不支持。'),
+            ],
+            if (_backend.mobile) ...[
+              const SizedBox(height: 12),
+              const Text(
+                '移动端支持内置单块与箱头，使用系统当前音频路由及系统单声道输入。请先连接 USB 声卡与有线耳机，再开始监听；路由变化或来电后需手动恢复。',
+              ),
             ],
             const SizedBox(height: 16),
             Wrap(
               spacing: 12,
               runSpacing: 12,
               children: [
-                OutlinedButton.icon(
-                  onPressed: canConfigure ? () => _send('settings') : null,
-                  icon: const Icon(Icons.settings_input_component),
-                  label: const Text('声卡与输入通道'),
-                ),
+                if (_backend.supportsDeviceSettings)
+                  OutlinedButton.icon(
+                    onPressed: canConfigure ? () => _send('settings') : null,
+                    icon: const Icon(Icons.settings_input_component),
+                    label: const Text('声卡与输入通道'),
+                  ),
                 FilledButton.icon(
                   onPressed: supported && !_busy
                       ? () => _send(_running ? 'stop' : 'start')
@@ -382,38 +389,39 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
               },
             ),
             const SizedBox(height: 20),
-            Card(
-              child: ExpansionTile(
-                key: const PageStorageKey('effects-vst3'),
-                title: const Text('外部 VST3 插件'),
-                subtitle: const Text('加载已安装的插件'),
-                childrenPadding: const EdgeInsets.all(16),
-                children: [
-                  const Text('也可加载当前系统和 CPU 架构对应的 .vst3 插件，输入插件的绝对路径。'),
-                  const SizedBox(height: 12),
-                  TextField(
-                    key: const PageStorageKey('effects-vst3-path'),
-                    controller: _path,
-                    enabled: canEdit,
-                    decoration: const InputDecoration(
-                      labelText: 'VST3 插件绝对路径',
-                      hintText: '/home/you/.vst3/MyEffect.vst3',
+            if (_backend.supportsVst3)
+              Card(
+                child: ExpansionTile(
+                  key: const PageStorageKey('effects-vst3'),
+                  title: const Text('外部 VST3 插件'),
+                  subtitle: const Text('加载已安装的插件'),
+                  childrenPadding: const EdgeInsets.all(16),
+                  children: [
+                    const Text('也可加载当前系统和 CPU 架构对应的 .vst3 插件，输入插件的绝对路径。'),
+                    const SizedBox(height: 12),
+                    TextField(
+                      key: const PageStorageKey('effects-vst3-path'),
+                      controller: _path,
+                      enabled: canEdit,
+                      decoration: const InputDecoration(
+                        labelText: 'VST3 插件绝对路径',
+                        hintText: '/home/you/.vst3/MyEffect.vst3',
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      onPressed: canEdit && _plugins.length < 8
-                          ? () => _send('load', {'path': _path.text.trim()})
-                          : null,
-                      icon: const Icon(Icons.add),
-                      label: const Text('加载插件'),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: canEdit && _plugins.length < 8
+                            ? () => _send('load', {'path': _path.text.trim()})
+                            : null,
+                        icon: const Icon(Icons.add),
+                        label: const Text('加载插件'),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
             Card(
               child: ExpansionTile(
                 key: const PageStorageKey('effects-diagnostics'),
@@ -453,16 +461,26 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                           : '${_status['sampleRate']} Hz · 实际 ${_status['bufferSize']} 帧'
                                 ' · 每块 ${(_status['blockMs'] as num? ?? 0).toStringAsFixed(2)} ms',
                     ),
-                    Text(
-                      '驱动报告：输入 ${(_status['inputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
-                      ' / 输出 ${(_status['outputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
-                      ' · 插件 ${(_status['pluginLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms',
-                    ),
-                    Text(
-                      '报告合计 ${(_status['latencyMs'] as num? ?? 0).toStringAsFixed(1)} ms（非实测往返延迟）'
-                      ' · 音频负载 ${((_status['cpu'] as num? ?? 0) * 100).toStringAsFixed(1)}%'
-                      '${(_status['xruns'] as num? ?? -1) >= 0 ? ' · 欠载 ${_status['xruns']} 次' : ''}',
-                    ),
+                    if (_status['latencyAvailable'] != false)
+                      Text(
+                        '驱动报告：输入 ${(_status['inputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
+                        ' / 输出 ${(_status['outputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
+                        ' · 插件 ${(_status['pluginLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms',
+                      ),
+                    if (_status['latencyAvailable'] != false)
+                      Text(
+                        '报告合计 ${(_status['latencyMs'] as num? ?? 0).toStringAsFixed(1)} ms（非实测往返延迟）'
+                        '${_status['cpuAvailable'] == false ? '' : ' · 音频负载 ${((_status['cpu'] as num? ?? 0) * 100).toStringAsFixed(1)}%'}'
+                        '${(_status['xruns'] as num? ?? -1) >= 0 ? ' · 欠载 ${_status['xruns']} 次' : ''}',
+                      ),
+                    if (_status['latencyAvailable'] == false)
+                      const Text('当前后端不提供可靠的驱动延迟报告，往返延迟需实际测量。'),
+                    if (_status['cpuAvailable'] == false)
+                      const Text('当前后端不提供音频负载统计。'),
+                    if (_status['outputBufferFrames'] != null)
+                      Text(
+                        '输出队列缓冲：${_status['outputBufferFrames']} 帧；实际回调块长与队列大小可能不同。',
+                      ),
                     if ((_status['pipewireQuantum'] as String? ?? '')
                         .isNotEmpty)
                       Text(

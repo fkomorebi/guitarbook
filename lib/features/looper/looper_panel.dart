@@ -597,7 +597,7 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
     const SizedBox(height: 12),
     if (_c.input is EffectsLoopInput)
       const Text(
-        '录音源：效果器处理后的声音（单声道）。先在下方开始监听；输入通道与 48 kHz 采样率在效果器声卡设置中选择。效果器输出音量不影响录音，已录层保留原音色。',
+        '录音源：效果器处理后的声音（单声道）。先在下方开始监听；实际采样率需为 48 kHz；桌面在声卡设置中选择输入，移动端使用系统当前路由的单声道输入。效果器输出音量不影响录音，已录层保留原音色。',
       )
     else ...[
       TextButton.icon(

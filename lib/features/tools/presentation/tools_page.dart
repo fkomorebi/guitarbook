@@ -100,7 +100,7 @@ class ToolsPage extends StatelessWidget {
                     tools: [
                       _Tool(
                         '实时效果器',
-                        'Linux / Windows · VST3 插件与实时监听',
+                        '手机内置单块与箱头 · 桌面另支持 VST3',
                         Icons.graphic_eq,
                         EffectsPage(),
                       ),
