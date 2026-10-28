@@ -197,7 +197,9 @@ public:
                 else {
                     int destination = request["destination"];
                     if (destination < 0 || destination >= static_cast<int>(chain.size())) throw String::fromUTF8("无效排序位置。");
-                    std::swap(chain[static_cast<size_t>(index)], chain[static_cast<size_t>(destination)]);
+                    auto moved = std::move(chain[static_cast<size_t>(index)]);
+                    chain.erase(chain.begin() + index);
+                    chain.insert(chain.begin() + destination, std::move(moved));
                 }
             }
         } else if (action == "gain") {
@@ -245,6 +247,22 @@ public:
     void testBuiltinChain() {
         testBuiltinDsp();
         enabled = true; // Exercise structural commands while monitoring is enabled.
+        // A non-adjacent move inserts the same instance and preserves intervening order.
+        for (const auto* kind : {"amp_clean", "delay", "fuzz"})
+            command(object({{"command", "builtin"}, {"kind", kind}}));
+        auto* original = chain[0].plugin.get();
+        auto* middle = chain[1].plugin.get();
+        auto* last = chain[2].plugin.get();
+        command(object({{"command", "parameter"}, {"index", 0}, {"parameter", 0}, {"value", 7.0}}));
+        command(object({{"command", "bypass"}, {"index", 0}, {"value", true}}));
+        command(object({{"command", "move"}, {"index", 0}, {"destination", 2}}));
+        if (chain[0].plugin.get() != middle || chain[1].plugin.get() != last || chain[2].plugin.get() != original
+            || !chain[2].bypass || dynamic_cast<BuiltinEffect*>(original)->getParameters()[0]->getValue() < 0.69f)
+            throw String("Move did not preserve insertion order or instance state");
+        command(object({{"command", "move"}, {"index", 2}, {"destination", 0}}));
+        if (chain[0].plugin.get() != original || chain[1].plugin.get() != middle || chain[2].plugin.get() != last)
+            throw String("Reverse insertion move failed");
+        chain.clear();
         command(object({{"command", "builtin"}, {"kind", "compressor"}}));
         command(object({{"command", "builtin"}, {"kind", "fuzz"}}));
         auto render = [&] {

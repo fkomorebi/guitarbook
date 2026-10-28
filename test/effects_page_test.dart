@@ -45,12 +45,54 @@ class FakeEffects extends EffectsBackend {
           'reverb': '混响 Reverb',
           'overdrive': '过载 Overdrive',
           'delay': '延迟 Delay',
+          'amp_clean': '美式清音箱头',
+          'amp_chime': '英式清脆箱头',
+          'amp_crunch': '英式摇滚箱头',
+          'amp_modern': '现代高增益箱头',
         }[kind],
         'kind': kind,
         'bypass': false,
-        'parameters': [
-          {'name': '驱动', 'min': 1.0, 'max': 30.0, 'value': 12.0, 'unit': ''},
-        ],
+        'parameters': kind.startsWith('amp_')
+            ? [
+                {
+                  'name': '增益',
+                  'min': 0.0,
+                  'max': 10.0,
+                  'value': 4.0,
+                  'unit': '',
+                },
+                for (final name in ['低频', '中频', '高频'])
+                  {
+                    'name': name,
+                    'min': -12.0,
+                    'max': 12.0,
+                    'value': 0.0,
+                    'unit': 'dB',
+                  },
+                {
+                  'name': '主音量',
+                  'min': 0.0,
+                  'max': 1.0,
+                  'value': 0.5,
+                  'unit': '',
+                },
+                {
+                  'name': '箱体',
+                  'min': 0.0,
+                  'max': 1.0,
+                  'value': 1.0,
+                  'unit': '',
+                },
+              ]
+            : [
+                {
+                  'name': '驱动',
+                  'min': 1.0,
+                  'max': 30.0,
+                  'value': 12.0,
+                  'unit': '',
+                },
+              ],
       });
     }
     if (command == 'parameter') {
@@ -61,9 +103,8 @@ class FakeEffects extends EffectsBackend {
     if (command == 'move') {
       final first = arguments['index'] as int;
       final second = arguments['destination'] as int;
-      final item = plugins[first];
-      plugins[first] = plugins[second];
-      plugins[second] = item;
+      final item = plugins.removeAt(first);
+      plugins.insert(second, item);
     }
     if (command == 'bypass') {
       plugins[arguments['index'] as int]['bypass'] = arguments['value'];
@@ -98,6 +139,67 @@ class FakeEffects extends EffectsBackend {
 }
 
 void main() {
+  testWidgets('四种箱头可添加，窄屏大字号六旋钮独立调参与旁通', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: EffectsPage(backend: backend),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final label in ['美式清音箱头', '英式清脆箱头', '英式摇滚箱头', '现代高增益箱头']) {
+      final button = find.widgetWithText(OutlinedButton, label);
+      await tester.scrollUntilVisible(
+        button,
+        200,
+        scrollable: find
+            .descendant(
+              of: find.byType(ListView),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await tester.ensureVisible(button);
+      await tester.pumpAndSettle();
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+    }
+    expect(backend.plugins.map((p) => p['kind']), [
+      'amp_clean',
+      'amp_chime',
+      'amp_crunch',
+      'amp_modern',
+    ]);
+    final knob = find.byKey(const ValueKey('0-amp_clean-5'));
+    await tester.ensureVisible(knob);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(knob);
+    await tester.pumpAndSettle();
+    await tester.drag(knob, const Offset(0, 60));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(backend.plugins[0]['parameters'][5]['value'], lessThan(1));
+    expect(backend.plugins[1]['parameters'][5]['value'], 1);
+    final footswitch = find.byKey(const ValueKey('pedal-switch-0'));
+    await tester.ensureVisible(footswitch);
+    await tester.pumpAndSettle();
+    await tester.tap(footswitch);
+    await tester.pump();
+    expect(backend.plugins[0]['bypass'], isTrue);
+    expect(backend.running, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('效果器加载、监听、旁通、停止与离页释放', (tester) async {
     final backend = FakeEffects();
     await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));

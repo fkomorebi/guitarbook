@@ -7,7 +7,7 @@ inline void testBuiltinDsp() {
     juce::MidiBuffer midi;
     // Check sample-rate changes, parameter extremes, silence and finite output.
     for (auto rate : {44100.0, 48000.0, 96000.0}) {
-        for (const auto* kind : {"fuzz", "compressor", "reverb", "overdrive", "delay"}) {
+        for (const auto* kind : {"fuzz", "compressor", "reverb", "overdrive", "delay", "amp_clean", "amp_chime", "amp_crunch", "amp_modern"}) {
             BuiltinEffect effect(kind);
             effect.prepareToPlay(rate, 512);
             juce::AudioBuffer<float> audio(2, 512);
@@ -23,6 +23,42 @@ inline void testBuiltinDsp() {
                     for (int i = 0; i < 512; ++i) require(std::isfinite(audio.getSample(ch, i)), "Non-finite DSP output");
             }
         }
+    }
+    // Compare complete waveforms, exercise every control and reset/instance isolation.
+    const auto renderAmp = [&midi](const char* kind, int parameter, float value) {
+        BuiltinEffect amp(kind);
+        if (parameter >= 0) amp.setParameterValue(parameter, value);
+        amp.prepareToPlay(48000, 4096);
+        juce::AudioBuffer<float> audio(2, 4096);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < 4096; ++i) {
+                const double t = i / 48000.0;
+                audio.setSample(ch, i, 0.12f * static_cast<float>(
+                    std::sin(t * 2 * juce::MathConstants<double>::pi * 110) +
+                    std::sin(t * 2 * juce::MathConstants<double>::pi * 997) +
+                    std::sin(t * 2 * juce::MathConstants<double>::pi * 6000)));
+            }
+        amp.processBlock(audio, midi);
+        return audio;
+    };
+    const auto difference = [](const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b) {
+        double sum = 0;
+        for (int i = 0; i < a.getNumSamples(); ++i) sum += std::abs(a.getSample(0, i) - b.getSample(0, i));
+        return sum;
+    };
+    std::vector<juce::AudioBuffer<float>> models;
+    for (const auto* kind : {"amp_clean", "amp_chime", "amp_crunch", "amp_modern"}) {
+        auto reference = renderAmp(kind, -1, 0);
+        require(reference.getMagnitude(0, 4096) > 0.01f, "Amp produced no audio");
+        for (const auto& previous : models)
+            require(difference(reference, previous) > 1, "Amp models sound identical");
+        for (int parameter = 0; parameter < 6; ++parameter) {
+            const auto changed = renderAmp(kind, parameter, parameter == 0 ? 10 : parameter < 4 ? -12 : 0);
+            require(difference(reference, changed) > 1, "Amp control has no effect");
+            if (parameter == 4) require(changed.getMagnitude(0, 4096) == 0, "Amp master zero is not silent");
+        }
+        require(difference(reference, renderAmp(kind, -1, 0)) == 0, "Amp instances shared state");
+        models.push_back(std::move(reference));
     }
     BuiltinEffect delay("delay");
     delay.setParameterValue(0, 20);

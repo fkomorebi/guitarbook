@@ -351,6 +351,10 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                   ('reverb', '混响'),
                   ('overdrive', '过载'),
                   ('delay', '延迟'),
+                  ('amp_clean', '美式清音箱头'),
+                  ('amp_chime', '英式清脆箱头'),
+                  ('amp_crunch', '英式摇滚箱头'),
+                  ('amp_modern', '现代高增益箱头'),
                 ])
                   OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(

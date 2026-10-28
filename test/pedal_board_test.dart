@@ -10,6 +10,96 @@ import 'package:guitarbook/features/effects/pedal_board.dart';
 import 'effects_page_test.dart' show FakeEffects;
 
 void main() {
+  testWidgets('拖动把手跨多块插入，保留参数旁通，取消不改链', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    for (final kind in ['fuzz', 'amp_clean', 'delay', 'fuzz']) {
+      await backend.send('builtin', {'kind': kind});
+    }
+    backend.plugins[0]['parameters'][0]['value'] = 19.0;
+    backend.plugins[0]['bypass'] = true;
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pumpAndSettle();
+    final source = find.byKey(const ValueKey('pedal-drag-0'));
+    final target = find.byKey(const ValueKey('pedal-drag-3'));
+    await tester.ensureVisible(source);
+    await tester.pumpAndSettle();
+    final gesture = await tester.startGesture(
+      tester.getCenter(source),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(-20, 0));
+    await tester.pump();
+    await gesture.moveTo(tester.getCenter(target));
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(backend.plugins.map((p) => p['kind']), [
+      'amp_clean',
+      'delay',
+      'fuzz',
+      'fuzz',
+    ]);
+    expect(backend.plugins[3]['parameters'][0]['value'], 19);
+    expect(backend.plugins[3]['bypass'], isTrue);
+    expect(backend.requests.where((r) => r['command'] == 'move').single, {
+      'command': 'move',
+      'index': 0,
+      'destination': 3,
+    });
+    final cancel = await tester.startGesture(tester.getCenter(target));
+    await cancel.moveBy(const Offset(0, -80));
+    await tester.pump();
+    await cancel.cancel();
+    await tester.pumpAndSettle();
+    expect(backend.requests.where((r) => r['command'] == 'move'), hasLength(1));
+    expect(backend.calls.where((c) => c == 'stop'), isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('窄屏拖动排序把手至左边缘自动浏览，松开板外不排序', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    for (var i = 0; i < 8; i++) {
+      await backend.send('builtin', {'kind': 'fuzz'});
+    }
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pumpAndSettle();
+    final handle = find.byKey(const ValueKey('pedal-drag-0'));
+    await tester.scrollUntilVisible(
+      handle,
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.ensureVisible(handle);
+    await tester.pumpAndSettle();
+    final start = tester.getCenter(handle);
+    final gesture = await tester.startGesture(start);
+    await gesture.moveBy(const Offset(-20, 0));
+    await tester.pump();
+    await gesture.moveTo(Offset(28, start.dy));
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(tester.getCenter(handle).dx, greaterThan(start.dx));
+    await gesture.moveTo(const Offset(0, 0));
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(backend.calls.where((c) => c == 'move'), isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('单块右进左出，脚踏旁通与前后排序同步实际音频链', (tester) async {
     tester.view.physicalSize = const Size(1440, 1600);
     tester.view.devicePixelRatio = 1;

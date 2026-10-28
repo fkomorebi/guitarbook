@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
@@ -29,9 +30,45 @@ class PedalBoard extends StatefulWidget {
 
 class _PedalBoardState extends State<PedalBoard> {
   final _scroll = ScrollController();
+  final _viewport = GlobalKey();
+  Timer? _edgeTimer;
+  double _edgeStep = 0;
+
+  void _endDrag() {
+    _edgeTimer?.cancel();
+    _edgeTimer = null;
+    _edgeStep = 0;
+  }
+
+  void _dragUpdate(DragUpdateDetails details) {
+    final box = _viewport.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !_scroll.hasClients) return;
+    final local = box.globalToLocal(details.globalPosition);
+    final x = local.dx;
+    if (local.dy < 0 || local.dy > box.size.height) {
+      _edgeStep = 0;
+      return;
+    }
+    // The horizontal scroll view is reversed: increasing offset reveals the left.
+    _edgeStep = x < 40
+        ? 12
+        : x > box.size.width - 40
+        ? -12
+        : 0;
+    _edgeTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+      if (!_scroll.hasClients || _edgeStep == 0) return;
+      _scroll.jumpTo(
+        (_scroll.offset + _edgeStep).clamp(
+          0.0,
+          _scroll.position.maxScrollExtent,
+        ),
+      );
+    });
+  }
 
   @override
   void dispose() {
+    _endDrag();
     _scroll.dispose();
     super.dispose();
   }
@@ -104,6 +141,7 @@ class _PedalBoardState extends State<PedalBoard> {
                     },
                   ),
                   child: Scrollbar(
+                    key: _viewport,
                     controller: _scroll,
                     thumbVisibility: true,
                     child: SingleChildScrollView(
@@ -174,27 +212,75 @@ class _PedalBoardState extends State<PedalBoard> {
                                           const SizedBox(width: 48),
                                         SizedBox(
                                           width: width,
-                                          child: _Pedal(
-                                            key: ValueKey('pedal-$i'),
-                                            index: i,
-                                            plugin: Map<String, dynamic>.from(
-                                              widget.plugins[i] as Map,
-                                            ),
-                                            enabled: widget.enabled,
-                                            canMoveForward: i > 0,
-                                            canMoveBackward:
-                                                i < widget.plugins.length - 1,
-                                            onCommand: widget.onCommand,
-                                            onParameterStart:
-                                                widget.onParameterStart,
-                                            onParameter: (parameter, value) =>
-                                                widget.onParameter(
-                                                  i,
-                                                  parameter,
-                                                  value,
+                                          child: DragTarget<int>(
+                                            onWillAcceptWithDetails:
+                                                (details) =>
+                                                    widget.enabled &&
+                                                    details.data != i,
+                                            onAcceptWithDetails: (details) {
+                                              _endDrag();
+                                              widget.onCommand('move', {
+                                                'index': details.data,
+                                                'destination': i,
+                                              });
+                                            },
+                                            builder:
+                                                (
+                                                  context,
+                                                  candidates,
+                                                  rejected,
+                                                ) => DecoratedBox(
+                                                  decoration: BoxDecoration(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          12,
+                                                        ),
+                                                    boxShadow:
+                                                        candidates.isEmpty
+                                                        ? []
+                                                        : const [
+                                                            BoxShadow(
+                                                              color: Color(
+                                                                0xFFFFE6A0,
+                                                              ),
+                                                              spreadRadius: 4,
+                                                              blurRadius: 8,
+                                                            ),
+                                                          ],
+                                                  ),
+                                                  child: _Pedal(
+                                                    key: ValueKey('pedal-$i'),
+                                                    dragUpdate: _dragUpdate,
+                                                    dragEnd: _endDrag,
+                                                    index: i,
+                                                    plugin:
+                                                        Map<
+                                                          String,
+                                                          dynamic
+                                                        >.from(
+                                                          widget.plugins[i]
+                                                              as Map,
+                                                        ),
+                                                    enabled: widget.enabled,
+                                                    canMoveForward: i > 0,
+                                                    canMoveBackward:
+                                                        i <
+                                                        widget.plugins.length -
+                                                            1,
+                                                    onCommand: widget.onCommand,
+                                                    onParameterStart:
+                                                        widget.onParameterStart,
+                                                    onParameter:
+                                                        (parameter, value) =>
+                                                            widget.onParameter(
+                                                              i,
+                                                              parameter,
+                                                              value,
+                                                            ),
+                                                    onParameterEnd:
+                                                        widget.onParameterEnd,
+                                                  ),
                                                 ),
-                                            onParameterEnd:
-                                                widget.onParameterEnd,
                                           ),
                                         ),
                                       ],
@@ -211,7 +297,7 @@ class _PedalBoardState extends State<PedalBoard> {
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 4, 16, 14),
               child: Text(
-                '左右拖动浏览效果器板 · 旋钮上下拖动，点击可精细调节 · 脚踏切换旁通',
+                '拖动顶部把手排序，板边缘自动滚动 · 拖动底板浏览 · 旋钮上下调节 · 脚踏切换旁通',
                 style: TextStyle(color: Color(0xFFB8BEBC), fontSize: 12),
               ),
             ),
@@ -225,6 +311,8 @@ class _PedalBoardState extends State<PedalBoard> {
 class _Pedal extends StatelessWidget {
   const _Pedal({
     super.key,
+    required this.dragUpdate,
+    required this.dragEnd,
     required this.index,
     required this.plugin,
     required this.enabled,
@@ -235,6 +323,8 @@ class _Pedal extends StatelessWidget {
     required this.onParameter,
     required this.onParameterEnd,
   });
+  final void Function(DragUpdateDetails) dragUpdate;
+  final VoidCallback dragEnd;
   final int index;
   final Map<String, dynamic> plugin;
   final bool enabled, canMoveForward, canMoveBackward;
@@ -246,6 +336,10 @@ class _Pedal extends StatelessWidget {
   Widget build(BuildContext context) {
     final kind = plugin['kind'] ?? 'vst3';
     final (color, title, subtitle) = switch (kind) {
+      'amp_clean' => (const Color(0xFF446A76), 'US CLEAN', '美式清音 / 箱头'),
+      'amp_chime' => (const Color(0xFF8B683D), 'UK CHIME', '英式清脆 / 箱头'),
+      'amp_crunch' => (const Color(0xFF776137), 'UK CRUNCH', '英式摇滚 / 箱头'),
+      'amp_modern' => (const Color(0xFF575666), 'MODERN', '现代高增益 / 箱头'),
       'fuzz' => (const Color(0xFFB84B32), 'FUZZ', '粗粝颗粒 / 法兹'),
       'compressor' => (const Color(0xFF81611E), 'COMP', '动态控制 / 压缩'),
       'reverb' => (const Color(0xFF625383), 'REVERB', '空间漫游 / 混响'),
@@ -298,13 +392,53 @@ class _Pedal extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(12, 18, 12, 14),
               child: Column(
                 children: [
-                  Text(
-                    '${index + 1}. ${plugin['name']}',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(0xFFFFF3D8),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                  Draggable<int>(
+                    key: ValueKey('pedal-drag-$index'),
+                    data: index,
+                    maxSimultaneousDrags: enabled ? 1 : 0,
+                    onDragUpdate: dragUpdate,
+                    onDragEnd: (_) => dragEnd(),
+                    onDraggableCanceled: (_, _) => dragEnd(),
+                    feedback: Material(
+                      elevation: 8,
+                      color: color,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          '${index + 1}. ${plugin['name']}',
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ),
+                    child: MouseRegion(
+                      cursor: enabled
+                          ? SystemMouseCursors.grab
+                          : SystemMouseCursors.basic,
+                      child: Tooltip(
+                        message: '拖动排序',
+                        child: Container(
+                          constraints: const BoxConstraints(minHeight: 48),
+                          alignment: Alignment.center,
+                          child: Column(
+                            children: [
+                              const Icon(
+                                Icons.drag_handle,
+                                color: Color(0xFFFFF3D8),
+                              ),
+                              Text(
+                                '${index + 1}. ${plugin['name']}',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Color(0xFFFFF3D8),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),

@@ -15,6 +15,18 @@ public:
             add("drive", "驱动", 1, kind == "fuzz" ? 30 : 20, kind == "fuzz" ? 12 : 4, "");
             add("tone", "音色", 200, 8000, kind == "fuzz" ? 2500 : 4000, "Hz");
             add("level", "输出", 0, 1, kind == "fuzz" ? 0.4f : 0.6f, "");
+        } else if (kind.startsWith("amp_")) {
+            if (kind == "amp_clean") { title = juce::String::fromUTF8("美式清音箱头"); model = 0; }
+            else if (kind == "amp_chime") { title = juce::String::fromUTF8("英式清脆箱头"); model = 1; }
+            else if (kind == "amp_crunch") { title = juce::String::fromUTF8("英式摇滚箱头"); model = 2; }
+            else if (kind == "amp_modern") { title = juce::String::fromUTF8("现代高增益箱头"); model = 3; }
+            else throw juce::String::fromUTF8("未知箱头类型。");
+            add("gain", "增益", 0, 10, model == 0 ? 2 : model == 1 ? 4 : model == 2 ? 5 : 6, "");
+            add("bass", "低频", -12, 12, 0, "dB");
+            add("mid", "中频", -12, 12, 0, "dB");
+            add("treble", "高频", -12, 12, 0, "dB");
+            add("master", "主音量", 0, 1, 0.5f, "");
+            add("cab", "箱体", 0, 1, 1, "");
         } else if (kind == "compressor") {
             title = juce::String::fromUTF8("压缩 Compressor");
             add("threshold", "阈值", -60, 0, -24, "dB");
@@ -43,6 +55,7 @@ public:
             smooth[i].setCurrentAndTargetValue(parameters[i]->get());
         }
         toneState.fill(0);
+        for (auto& state : ampState) state.fill(0);
         dcInput.fill(0);
         dcOutput.fill(0);
         envelope = 0;
@@ -68,9 +81,41 @@ public:
             return;
         }
         for (int sample = 0; sample < samples; ++sample) {
-            std::array<float, 5> values{};
+            std::array<float, 6> values{};
             for (size_t i = 0; i < parameters.size(); ++i) values[i] = smooth[i].getNextValue();
-            if (kind == "compressor") {
+            if (model >= 0) {
+                const auto coefficient = [this](float hz) {
+                    return 1 - std::exp(-juce::MathConstants<float>::twoPi * hz / static_cast<float>(rate));
+                };
+                const float lowCut = coefficient(model == 3 ? 110.0f : 55.0f);
+                const float bassSplit = coefficient(250);
+                const float trebleSplit = coefficient(2200);
+                const float cabCut = coefficient(model == 1 ? 5800.0f : model == 3 ? 3800.0f : 4600.0f);
+                const float bass = juce::Decibels::decibelsToGain(values[1]);
+                const float mid = juce::Decibels::decibelsToGain(values[2] + (model == 2 ? 2.0f : model == 3 ? -3.0f : 0.0f));
+                const float treble = juce::Decibels::decibelsToGain(values[3] + (model == 1 ? 2.0f : 0.0f));
+                for (int ch = 0; ch < 2; ++ch) {
+                    auto& state = ampState[static_cast<size_t>(ch)];
+                    const float input = juce::jlimit(-8.0f, 8.0f, audio.getSample(ch, sample));
+                    state[0] += lowCut * (input - state[0]);
+                    float x = (input - state[0]) * (1 + values[0] * (model == 0 ? 0.3f : model == 1 ? 0.8f : model == 2 ? 1.8f : 3.5f));
+                    const float bias = model == 1 ? 0.18f : model == 2 ? 0.1f : 0.0f;
+                    x = std::tanh(x + bias) - std::tanh(bias);
+                    if (model >= 2) x = std::tanh(x * (model == 3 ? 3.0f : 1.5f));
+                    state[1] += bassSplit * (x - state[1]);
+                    state[2] += trebleSplit * (x - state[2]);
+                    x = state[1] * bass + (state[2] - state[1]) * mid + (x - state[2]) * treble;
+                    x = std::tanh(x * 1.2f) * 0.8f;
+                    state[3] += cabCut * (x - state[3]);
+                    state[4] += cabCut * (state[3] - state[4]);
+                    x += values[5] * (state[4] - x);
+                    const float filtered = x - dcInput[static_cast<size_t>(ch)] +
+                        std::exp(-juce::MathConstants<float>::twoPi * 20 / static_cast<float>(rate)) * dcOutput[static_cast<size_t>(ch)];
+                    dcInput[static_cast<size_t>(ch)] = x;
+                    dcOutput[static_cast<size_t>(ch)] = filtered;
+                    audio.setSample(ch, sample, filtered * values[4]);
+                }
+            } else if (kind == "compressor") {
                 const float peak = juce::jmax(std::abs(audio.getSample(0, sample)), std::abs(audio.getSample(1, sample)));
                 const float coefficient = std::exp(-1.0f / static_cast<float>(rate * 0.001 * (peak > envelope ? values[2] : values[3])));
                 envelope = coefficient * envelope + (1 - coefficient) * peak;
@@ -164,11 +209,13 @@ private:
     }
     juce::String title;
     std::vector<juce::AudioParameterFloat*> parameters;
-    std::array<juce::SmoothedValue<float>, 5> smooth;
+    std::array<juce::SmoothedValue<float>, 6> smooth;
     std::array<float, 2> toneState{}, dcInput{}, dcOutput{};
     juce::AudioBuffer<float> delayBuffer;
     juce::Reverb reverb;
     double rate = 48000;
+    std::array<std::array<float, 5>, 2> ampState{};
+    int model = -1;
     float envelope = 0;
     int position = 0;
 };
