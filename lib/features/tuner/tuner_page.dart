@@ -1,3 +1,4 @@
+import '../../app/theme.dart';
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -249,7 +250,9 @@ class _TunerPageState extends State<TunerPage> with WidgetsBindingObserver {
                             _feedback.inTune
                                 ? Icons.check_circle
                                 : Icons.music_note,
-                            color: _feedback.inTune ? Colors.green : null,
+                            color: _feedback.inTune
+                                ? PracticeColors.inTune(context)
+                                : null,
                             size: 32,
                           ),
                           Text(
@@ -340,7 +343,9 @@ class _PitchGauge extends StatelessWidget {
                         child: Icon(
                           Icons.arrow_drop_down,
                           size: 36,
-                          color: inTune ? Colors.green : colors.primary,
+                          color: inTune
+                              ? PracticeColors.inTune(context)
+                              : colors.primary,
                         ),
                       ),
                   ],

@@ -18,8 +18,15 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT CMAKE_CROSSCOMPILING)
       check_include_file_cxx(type_traits GUITARBOOK_FALLBACK_HAS_CXX_HEADERS)
       unset(CMAKE_REQUIRED_FLAGS)
       if(GUITARBOOK_FALLBACK_HAS_CXX_HEADERS)
-        add_compile_options("--gcc-install-dir=${GUITARBOOK_GCC_DIR}")
-        add_link_options("--gcc-install-dir=${GUITARBOOK_GCC_DIR}")
+        # JUCE performs try_compile checks and bootstraps a separate juceaide
+        # build. Directory compile options do not reach either of those.
+        string(APPEND CMAKE_CXX_FLAGS " --gcc-install-dir=${GUITARBOOK_GCC_DIR}")
+        set(ENV{CXX} "${CMAKE_CXX_COMPILER}")
+        find_program(GUITARBOOK_CLANG_C clang)
+        if(GUITARBOOK_CLANG_C)
+          set(ENV{CC} "${GUITARBOOK_CLANG_C}")
+        endif()
+        set(ENV{CXXFLAGS} "${CMAKE_CXX_FLAGS}")
         message(STATUS "Using complete GCC installation: ${GUITARBOOK_GCC_DIR}")
       else()
         message(FATAL_ERROR "C++ standard library headers are missing. Install g++ and libstdc++ development packages.")
@@ -158,3 +165,7 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
   install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endif()
+
+# Native realtime VST3 host, isolated from Flutter audio playback.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../native/effects_host" "effects_host")
+add_dependencies(${BINARY_NAME} guitarbook_effects_host)

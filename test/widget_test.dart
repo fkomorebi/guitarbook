@@ -18,6 +18,29 @@ void main() {
     }
   });
 
+  testWidgets('分组首页在明暗与双倍字号下全部入口可达', (tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearAllTestValues);
+    tester.view.devicePixelRatio = 1;
+    for (final brightness in Brightness.values) {
+      for (final size in [const Size(320, 568), const Size(1440, 900)]) {
+        tester.view.physicalSize = size;
+        tester.platformDispatcher.platformBrightnessTestValue = brightness;
+        tester.platformDispatcher.textScaleFactorTestValue = 2;
+        await tester.pumpWidget(const GuitarbookApp());
+        await tester.pumpAndSettle();
+        for (final title in ['吉他调音器', '节拍器', '和弦练习', '音阶指板', '实时效果器', '鼓机']) {
+          await tester.ensureVisible(find.text(title));
+          await tester.pumpAndSettle();
+          expect(find.text(title).hitTestable(), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    }
+  });
+
   testWidgets('调音器可进入并选择琴弦', (tester) async {
     await tester.pumpWidget(const GuitarbookApp());
     await tester.ensureVisible(find.text('吉他调音器'));

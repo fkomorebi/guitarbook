@@ -15,6 +15,7 @@ void main() {
 
   testWidgets('首页进入，练习循环、自评和阶段重置', (tester) async {
     await tester.pumpWidget(const GuitarbookApp());
+    await tester.ensureVisible(find.text('和弦练习'));
     await tester.tap(find.text('和弦练习'));
     await tester.pumpAndSettle();
     expect(find.text('和弦入门课程'), findsOneWidget);

@@ -1,3 +1,4 @@
+import '../../app/theme.dart';
 import 'package:flutter/material.dart';
 
 import '../looper/looper_panel.dart';
@@ -69,10 +70,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final original = Theme.of(context);
-    final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF247C71),
-      brightness: original.brightness,
-    );
+    final scheme = original.colorScheme;
     return Theme(
       data: original.copyWith(colorScheme: scheme),
       child: Builder(
@@ -83,11 +81,14 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
             title: const Text('即兴工作台'),
             actions: [
               if (_capturing)
-                const Tooltip(
+                Tooltip(
                   message: '麦克风采集中，非录音时丢弃输入',
                   child: Padding(
                     padding: EdgeInsets.symmetric(horizontal: 12),
-                    child: Icon(Icons.mic, color: Color(0xFFDA7650)),
+                    child: Icon(
+                      Icons.mic,
+                      color: PracticeColors.recording(context),
+                    ),
                   ),
                 ),
               IconButton(

@@ -1,3 +1,4 @@
+import '../../app/theme.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -200,7 +201,9 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final compact = widget.compact;
-    final active = _c.recording ? const Color(0xFFDA7650) : colors.primary;
+    final active = _c.recording
+        ? PracticeColors.recording(context)
+        : colors.primary;
     final title = Row(
       children: [
         Expanded(
@@ -390,7 +393,11 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
                         shape: const CircleBorder(),
                         padding: EdgeInsets.zero,
                         backgroundColor: active,
-                        foregroundColor: Colors.white,
+                        foregroundColor: _c.recording
+                            ? (theme.brightness == Brightness.dark
+                                  ? const Color(0xFF3B160B)
+                                  : Colors.white)
+                            : colors.onPrimary,
                         elevation: 0,
                       ),
                       onPressed: _c.busy

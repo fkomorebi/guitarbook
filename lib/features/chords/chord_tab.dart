@@ -61,7 +61,7 @@ class _ChordTabState extends State<ChordTab> {
     final paper = dark ? const Color(0xFF202224) : Colors.white;
     final ink = dark ? const Color(0xFFEAE8E3) : const Color(0xFF202020);
     final line = ink.withValues(alpha: dark ? 0.55 : 0.65);
-    final accent = dark ? const Color(0xFFDFC09C) : const Color(0xFF795548);
+    final accent = Theme.of(context).colorScheme.primary;
     final scaler = MediaQuery.textScalerOf(context);
     final spacing = scaler.scale(13);
     final heading = scaler.scale(18) + 18;

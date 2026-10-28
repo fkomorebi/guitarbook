@@ -106,3 +106,7 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# Native realtime VST3 host, isolated from Flutter audio playback.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../native/effects_host" "effects_host")
+add_dependencies(${BINARY_NAME} guitarbook_effects_host)
