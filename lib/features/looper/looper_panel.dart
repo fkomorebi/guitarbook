@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'loop_audio.dart';
+import 'effects_loop_input.dart';
 import 'looper_controller.dart';
 import 'pedal_bindings.dart';
 
@@ -11,6 +12,7 @@ class LooperPanel extends StatefulWidget {
   const LooperPanel({
     super.key,
     this.controller,
+    this.input,
     this.onCaptureChanged,
     this.onActivityChanged,
     this.compact = false,
@@ -21,6 +23,7 @@ class LooperPanel extends StatefulWidget {
   final ValueChanged<String>? onActivityChanged;
   final ValueChanged<bool>? onCaptureChanged;
   final LooperController? controller;
+  final LoopInput? input;
 
   @override
   State<LooperPanel> createState() => _LooperPanelState();
@@ -38,7 +41,7 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
     super.initState();
     _c =
         widget.controller ??
-        LooperController(RecorderLoopInput(), createLoopAudio);
+        LooperController(widget.input ?? RecorderLoopInput(), createLoopAudio);
     _c.addListener(_refresh);
     WidgetsBinding.instance.addObserver(this);
     FocusManager.instance.addEarlyKeyEventHandler(_earlyKey);
@@ -592,41 +595,47 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
         ),
       ),
     const SizedBox(height: 12),
-    TextButton.icon(
-      onPressed: _c.capturing || _c.busy ? null : _c.refreshDevices,
-      icon: const Icon(Icons.refresh),
-      label: const Text('刷新录音设备'),
-    ),
-    DropdownButtonFormField<String>(
-      key: ValueKey(
-        'device-${_c.device?.id}-${_c.devices.map((d) => d.id).join(',')}',
+    if (_c.input is EffectsLoopInput)
+      const Text(
+        '录音源：效果器处理后的声音（单声道）。先在下方开始监听；输入通道与 48 kHz 采样率在效果器声卡设置中选择。效果器输出音量不影响录音，已录层保留原音色。',
+      )
+    else ...[
+      TextButton.icon(
+        onPressed: _c.capturing || _c.busy ? null : _c.refreshDevices,
+        icon: const Icon(Icons.refresh),
+        label: const Text('刷新录音设备'),
       ),
-      initialValue: _c.device?.id ?? '',
-      isExpanded: true,
-      decoration: const InputDecoration(labelText: '录音输入'),
-      items: [
-        const DropdownMenuItem(value: '', child: Text('系统默认输入')),
-        for (final device in _c.devices)
-          DropdownMenuItem(
-            value: device.id,
-            child: Text(device.label, overflow: TextOverflow.ellipsis),
-          ),
-      ],
-      onChanged: _c.capturing || _c.busy
-          ? null
-          : (id) {
-              _updateSettings(() {
-                _c.device = id == ''
-                    ? null
-                    : _c.devices.firstWhere((d) => d.id == id);
-              });
-            },
-    ),
-    const SizedBox(height: 8),
-    const Text(
-      '声卡直通监听有声不代表应用收到信号。请选择吉他连接的 Inst/Line 输入；Mic 是麦克风，Monitor/Loopback 是回环。切换设备前先停止循环。录音时主面板显示输入电平，持续低电平会提示检查。',
-    ),
-    const SizedBox(height: 12),
+      DropdownButtonFormField<String>(
+        key: ValueKey(
+          'device-${_c.device?.id}-${_c.devices.map((d) => d.id).join(',')}',
+        ),
+        initialValue: _c.device?.id ?? '',
+        isExpanded: true,
+        decoration: const InputDecoration(labelText: '录音输入'),
+        items: [
+          const DropdownMenuItem(value: '', child: Text('系统默认输入')),
+          for (final device in _c.devices)
+            DropdownMenuItem(
+              value: device.id,
+              child: Text(device.label, overflow: TextOverflow.ellipsis),
+            ),
+        ],
+        onChanged: _c.capturing || _c.busy
+            ? null
+            : (id) {
+                _updateSettings(() {
+                  _c.device = id == ''
+                      ? null
+                      : _c.devices.firstWhere((d) => d.id == id);
+                });
+              },
+      ),
+      const SizedBox(height: 8),
+      const Text(
+        '声卡直通监听有声不代表应用收到信号。请选择吉他连接的 Inst/Line 输入；Mic 是麦克风，Monitor/Loopback 是回环。切换设备前先停止循环。录音时主面板显示输入电平，持续低电平会提示检查。',
+      ),
+      const SizedBox(height: 12),
+    ],
     Text('智能录音触发门槛：${_c.smartThresholdDb.round()} dBFS'),
     Slider(
       key: const ValueKey('smart-threshold'),
@@ -661,8 +670,10 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
       '首层：踩一次录音，再踩一次循环。播放中踩一次叠录，再踩一次结束，或满一圈自动结束；最多 6 层。停止丢弃未完成录音，保留已完成层。',
     ),
     const SizedBox(height: 8),
-    const Text(
-      '播放期间保持采集，为叠录做准备；非录音时丢弃输入。停止后关闭麦克风。无实时软件监听，请使用耳机或声卡直通监听。音频和绑定只保存在当前页面，不写文件、不上传。',
+    Text(
+      _c.input is EffectsLoopInput
+          ? '播放期间保持湿声采集，非录音时丢弃输入。停止 Looper 不停止效果器监听；停止监听会中止录音。混响与延迟尾音按实际录制时长保留，智能录音可能因长尾延后结束。音频仅保存在当前页面内存中。'
+          : '播放期间保持采集，为叠录做准备；非录音时丢弃输入。停止后关闭麦克风。无实时软件监听，请使用耳机或声卡直通监听。音频和绑定只保存在当前页面，不写文件、不上传。',
     ),
   ];
 }

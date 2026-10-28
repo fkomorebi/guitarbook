@@ -192,7 +192,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
             const SizedBox(height: 8),
             Text(
               widget.embedded
-                  ? '效果器与伴奏可同时使用。点击开始监听才会出声；Looper 仍录入原始输入。请使用声卡有线耳机，关闭直通监听。'
+                  ? '效果器与伴奏可同时使用。点击开始监听才会出声；Looper 录入效果器处理后的声音（48 kHz 单声道），已录层保留当时音色。请使用声卡有线耳机，关闭直通监听。'
                   : '插上吉他，边弹边塑造音色。进入即监听，效果可随时添加、旁通与调整。请使用声卡有线耳机，关闭直通监听。',
             ),
             if (widget.embedded && supported) ...[

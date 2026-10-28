@@ -177,7 +177,9 @@ class LooperController extends ChangeNotifier {
           _inputFailed('读取循环进度失败，请检查音频设备后重试。');
         }
       },
-      onError: (Object _) => _inputFailed('录音中断，请检查输入设备后重试。'),
+      onError: (Object error) => _inputFailed(
+        error is StateError ? '录音中断：${error.message}' : '录音中断，请检查输入设备后重试。',
+      ),
       onDone: () {
         if (capturing) _inputFailed('录音输入已结束，请重新开始。');
       },

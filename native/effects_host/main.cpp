@@ -40,7 +40,33 @@ public:
 
     var command(const var& request) {
         auto action = request["command"].toString();
-        if (action == "probe") {
+        if (action == "loopStart") {
+            const ScopedLock lock(chainLock);
+            if (!enabled || failed) throw String::fromUTF8("请先在下方效果器中开始监听，再录音。");
+            if (std::abs(rate - 48000.0) > 0.1)
+                throw String::fromUTF8("效果器湿声录音需要 48 kHz，请停止监听并在声卡设置中选择 48000 Hz。");
+            wetActive = false;
+            wetFifo.reset();
+            wetOverflow = false;
+            wetActive = true;
+            return object({{"sampleRate", 48000}});
+        } else if (action == "loopStop") {
+            const ScopedLock lock(chainLock);
+            wetActive = false;
+            wetFifo.reset();
+            return object({});
+        } else if (action == "loopRead") {
+            if (!wetActive || !enabled || failed)
+                throw String::fromUTF8("效果器监听已停止，请重新开始监听和录音。");
+            if (wetOverflow) throw String::fromUTF8("湿声采集缓冲溢出，请停止后重新录音。");
+            MemoryBlock pcm;
+            int start1, size1, start2, size2;
+            wetFifo.prepareToRead(wetFifo.getNumReady(), start1, size1, start2, size2);
+            pcm.append(wetSamples.data() + start1 * 2, static_cast<size_t>(size1 * 2));
+            pcm.append(wetSamples.data() + start2 * 2, static_cast<size_t>(size2 * 2));
+            wetFifo.finishedRead(size1 + size2);
+            return object({{"pcm", Base64::toBase64(pcm.getData(), pcm.getSize())}});
+        } else if (action == "probe") {
             // Open with monitoring disabled, then release the device even on failure.
             if (enabled) return status();
             try {
@@ -247,7 +273,48 @@ public:
         command(object({{"command", "remove"}, {"index", 0}}));
         if (std::abs(render() - bypassed) > 0.0001) throw String("Bypass did not match the empty chain");
         if (!enabled) throw String("Live edits stopped monitoring");
+        // Prove the tap captures processed audio independently of monitor gain.
+        command(object({{"command", "loopStart"}}));
+        buffer.setSize(2, block);
+        std::vector<float> input(static_cast<size_t>(block), 0.4f);
+        std::vector<float> left(static_cast<size_t>(block)), right(static_cast<size_t>(block));
+        const float* inputs[] = {input.data()};
+        float* outputs[] = {left.data(), right.data()};
+        gain = 0;
+        audioDeviceIOCallbackWithContext(inputs, 1, outputs, 2, block, {});
+        auto captured = command(object({{"command", "loopRead"}}));
+        MemoryOutputStream decoded;
+        if (!Base64::convertFromBase64(decoded, captured["pcm"].toString())
+            || decoded.getDataSize() != static_cast<size_t>(block * 2))
+            throw String("Wet PCM size mismatch");
+        const auto* pcm = static_cast<const uint8_t*>(decoded.getData());
+        for (int i = 0; i < block; ++i) {
+            const int value = pcm[i * 2] | (pcm[i * 2 + 1] << 8);
+            if (value != 13107 || left[static_cast<size_t>(i)] != 0)
+                throw String("Wet capture incorrectly follows monitor gain");
+        }
+        // A built-in effect must change the recorded samples too.
+        command(object({{"command", "builtin"}, {"kind", "overdrive"}}));
+        audioDeviceIOCallbackWithContext(inputs, 1, outputs, 2, block, {});
+        auto processed = command(object({{"command", "loopRead"}}));
+        if (processed["pcm"].toString() == captured["pcm"].toString())
+            throw String("Wet capture did not include effect processing");
+        for (int i = 0; i < 200; ++i)
+            audioDeviceIOCallbackWithContext(inputs, 1, outputs, 2, block, {});
+        bool overflowRejected = false;
+        try { command(object({{"command", "loopRead"}})); }
+        catch (const String&) { overflowRejected = true; }
+        if (!overflowRejected) throw String("Wet overflow silently dropped samples");
+        command(object({{"command", "loopStop"}}));
+        command(object({{"command", "loopStart"}}));
+        if (command(object({{"command", "loopRead"}}))["pcm"].toString().isNotEmpty())
+            throw String("Wet restart retained stale audio");
         enabled = false;
+        bool stoppedRejected = false;
+        try { command(object({{"command", "loopRead"}})); }
+        catch (const String&) { stoppedRejected = true; }
+        if (!stoppedRejected) throw String("Wet read accepted stopped monitoring");
+        std::cout << "Wet Looper capture tests passed" << std::endl;
         std::cout << "Editable built-in chain audio tests passed" << std::endl;
     }
 
@@ -292,6 +359,7 @@ public:
 
     void audioDeviceAboutToStart(AudioIODevice* device) override {
         const ScopedLock lock(chainLock);
+        wetActive = false;
         rate = device->getCurrentSampleRate();
         block = device->getCurrentBufferSizeSamples();
         buffer.setSize(2, block);
@@ -302,8 +370,8 @@ public:
         }
         failed = false;
     }
-    void audioDeviceStopped() override { enabled = false; inputPeak = outputPeak = 0; }
-    void audioDeviceError(const String&) override { failed = true; enabled = false; }
+    void audioDeviceStopped() override { wetActive = false; enabled = false; inputPeak = outputPeak = 0; }
+    void audioDeviceError(const String&) override { wetActive = false; failed = true; enabled = false; }
 
     void audioDeviceIOCallbackWithContext(const float* const* inputs, int numInputs,
         float* const* outputs, int numOutputs, int samples, const AudioIODeviceCallbackContext&) override {
@@ -329,6 +397,22 @@ public:
             item.plugin->processBlock(view, midi);
             if (channels == 1) buffer.copyFrom(1, 0, buffer, 0, 0, samples);
             midi.clear();
+        }
+        if (wetActive) {
+            int start1, size1, start2, size2;
+            wetFifo.prepareToWrite(samples, start1, size1, start2, size2);
+            if (size1 + size2 < samples) wetOverflow = true;
+            const float* left = buffer.getReadPointer(0);
+            const float* right = buffer.getReadPointer(1);
+            for (int i = 0; i < size1 + size2; ++i) {
+                const float mixed = left[i] * 0.5f + right[i] * 0.5f;
+                const float value = std::isfinite(mixed) ? jlimit(-1.0f, 1.0f, mixed) : 0.0f;
+                const auto sample = static_cast<int16_t>(std::round(value * 32767.0f));
+                const int index = (i < size1 ? start1 + i : start2 + i - size1) * 2;
+                wetSamples[static_cast<size_t>(index)] = static_cast<uint8_t>(sample & 0xff);
+                wetSamples[static_cast<size_t>(index + 1)] = static_cast<uint8_t>((sample >> 8) & 0xff);
+            }
+            wetFifo.finishedWrite(size1 + size2);
         }
         float peak = 0;
         float volume = gain;
@@ -398,6 +482,10 @@ private:
     CriticalSection chainLock;
     std::vector<Effect> chain;
     std::unique_ptr<EditorWindow> settings;
+    // Single audio-thread producer / message-thread consumer, two seconds max.
+    AbstractFifo wetFifo{96001};
+    std::array<uint8_t, 96001 * 2> wetSamples{};
+    std::atomic<bool> wetActive{false}, wetOverflow{false};
     AudioBuffer<float> buffer;
     double rate = 48000;
     int block = 512;

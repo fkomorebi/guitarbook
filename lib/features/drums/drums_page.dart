@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../effects/effects_page.dart';
 import '../effects/effects_backend.dart';
 import '../looper/looper_panel.dart';
+import '../looper/effects_loop_input.dart';
 import '../looper/looper_controller.dart';
 import '../metronome/metronome_audio.dart';
 import '../metronome/metronome_audio_factory.dart';
@@ -27,6 +28,7 @@ class DrumsPage extends StatefulWidget {
 
 class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
   late final MetronomeController _controller;
+  late final _effectsBackend = widget.effectsBackend ?? EffectsBackend();
   final _looperKey = GlobalKey();
   final _drumKey = GlobalKey();
   List<List<bool>> _hits = [];
@@ -108,7 +110,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                       child: Text(
                         '先选一个鼓机律动，点击开始伴奏；再用 Looper 录下吉他并逐层叠录。\n\n'
                         '点击鼓件名称可静音，点击格子编辑十六分音符。修改鼓机参数会从首拍重启。窄屏用拍号分页查看全部鼓点。\n\n'
-                        '录音与鼓机独立循环，不自动对拍。下方效果器会静音检测引擎和声卡，手动开始监听；鼓机音量、Looper 回放音量与效果器输出音量可独立调节。Looper 仍录原始输入，设备能否同时使用取决于驱动。请用耳机避免伴奏串入录音。\n\n'
+                        '录音与鼓机独立循环，不自动对拍。下方效果器会静音检测引擎和声卡，手动开始监听；鼓机音量、Looper 回放音量与效果器输出音量可独立调节。Linux / Windows 的 Looper 录入效果器处理后的声音，需先开始监听并设为 48 kHz；其他平台录原始输入。请用耳机避免伴奏串入录音。\n\n'
                         '进入后台会停止播放与采集；离开工作台清空录音和设置。声音受系统音量影响，蓝牙可能增加延迟。',
                       ),
                     ),
@@ -145,6 +147,9 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                 final loop = LooperPanel(
                   key: _looperKey,
                   controller: widget.looperController,
+                  input: _effectsBackend.supported
+                      ? EffectsLoopInput(_effectsBackend)
+                      : null,
                   compact: compact,
                   landscape: landscape,
                   onCaptureChanged: (capturing) {
@@ -180,7 +185,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                           EffectsPage(
                             key: const ValueKey('jam-effects'),
                             embedded: true,
-                            backend: widget.effectsBackend,
+                            backend: _effectsBackend,
                           ),
                         ],
                       ),

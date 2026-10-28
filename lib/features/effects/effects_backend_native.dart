@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-/// Only control and meters cross this pipe; audio stays in the native process.
+/// Control, meters and bounded Looper PCM blocks share this local pipe.
 class EffectsBackend {
   bool get supported => Platform.isLinux || Platform.isWindows;
   Process? _process;
