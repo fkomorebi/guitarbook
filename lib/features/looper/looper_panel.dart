@@ -17,8 +17,10 @@ class LooperPanel extends StatefulWidget {
     this.onActivityChanged,
     this.compact = false,
     this.landscape = false,
+    this.wetInput = false,
   });
   final bool compact;
+  final bool wetInput;
   final bool landscape;
   final ValueChanged<String>? onActivityChanged;
   final ValueChanged<bool>? onCaptureChanged;
@@ -595,7 +597,7 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
         ),
       ),
     const SizedBox(height: 12),
-    if (_c.input is EffectsLoopInput)
+    if (widget.wetInput || _c.input is EffectsLoopInput)
       const Text(
         '录音源：效果器处理后的声音（单声道）。先在下方开始监听；实际采样率需为 48 kHz；桌面在声卡设置中选择输入，移动端使用系统当前路由的单声道输入。效果器输出音量不影响录音，已录层保留原音色。',
       )
@@ -671,9 +673,9 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
     ),
     const SizedBox(height: 8),
     Text(
-      _c.input is EffectsLoopInput
-          ? '播放期间保持湿声采集，非录音时丢弃输入。停止 Looper 不停止效果器监听；停止监听会中止录音。混响与延迟尾音按实际录制时长保留，智能录音可能因长尾延后结束。音频仅保存在当前页面内存中。'
-          : '播放期间保持采集，为叠录做准备；非录音时丢弃输入。停止后关闭麦克风。无实时软件监听，请使用耳机或声卡直通监听。音频和绑定只保存在当前页面，不写文件、不上传。',
+      widget.wetInput || _c.input is EffectsLoopInput
+          ? '播放期间保持湿声采集，非录音时丢弃输入。停止 Looper 不停止效果器监听；停止监听会中止录音。混响与延迟尾音按实际录制时长保留，智能录音可能因长尾延后结束。分层仅保存在当前页面内存中；顶部即兴录音可保存整段混音。'
+          : '播放期间保持采集，为叠录做准备；非录音时丢弃输入。停止后释放 Looper 的采集分支，整段录音仍运行时继续共享输入。无实时软件监听，请使用耳机或声卡直通监听。分层和绑定只保存在当前页面；顶部即兴录音可保存混音，不上传。',
     ),
   ];
 }

@@ -17,7 +17,7 @@ The toolkit also includes a standard-tuning guitar tuner, metronome, scale fretb
 
 Implementation and verification are separate. Existing platform projects do not guarantee device compatibility. Status below reflects the project records as of **2026-10-29**.
 
-| Platform | Drums / Looper | Live effects / processed recording | Recorded verification |
+| Platform | Drums / Looper / session recording | Live effects / processed recording | Recorded verification |
 | --- | --- | --- | --- |
 | Android | Integrated | Built-ins and amps | Debug APK built; basic permission, monitoring and background flows checked on an x86_64 emulator; real audio interfaces pending |
 | iOS | Integrated | Built-ins and amps | Native code integrated; Xcode build and device testing pending |
@@ -37,9 +37,15 @@ Use headphones to avoid feedback and recording the backing track. Drums require 
 
 Mobile effects use the current system audio route and mono input, with no in-app route picker or external VST3 support. Desktop device settings allow input/output and buffer selection; Windows does not bundle the ASIO SDK. Bluetooth is not a low-latency reference output.
 
+## Session recording
+
+The workspace recorder mixes drums, Looper playback and live input into a 48 kHz mono WAV. Select 8–128 MiB (default 32 MiB, about 5.8 minutes); once full, it overwrites the oldest audio. Stop to preview or save. Starting again replaces the unsaved take. Backgrounding stops recording; leaving clears unsaved audio. Effects platforms require monitoring at 48 kHz; live input is captured after effects, before monitor volume. Drums and Looper gains affect the mix. Use headphones; loud mixes clip. Multiple engines are not hardware synchronized.
+
+Native saves go to `Guitarbook Recordings` inside the application documents directory, with the path shown. iOS enables Files access; Android currently uses private app storage, removed on uninstall, without a share sheet or folder chooser. Web starts a browser download. Preview/export and playback use memory beyond the recording limit. Device audio and file-access checks remain pending; see the Chinese README for current automated checks.
+
 ## Current limits
 
-Drums and Looper run independently: there is no automatic beat synchronization, quantization or time stretching. Audio stays locally in memory, is not uploaded or exported, and is cleared when leaving the workspace. Effect chains, device choices and workspace settings are not persisted. Backgrounding stops playback/monitoring; returning does not restart it automatically. No MIDI or global background shortcuts are integrated.
+Drums and Looper run independently: there is no automatic beat synchronization, quantization or time stretching. Unsaved audio stays in local memory and is cleared when leaving the workspace; the session recorder can save a mixed WAV. Audio is not uploaded. Effect chains, device choices and workspace settings are not persisted. Backgrounding stops playback/monitoring; returning does not restart it automatically. No MIDI or global background shortcuts are integrated.
 
 Built-in amps use original algorithms and simple cabinet filtering, without IR convolution or oversampling. Third-party plugins must match the host OS and CPU architecture; they are not bundled. Driver-reported latency is not a physical round-trip measurement. Real-device sound, USB interface compatibility and long-running stability still need verification.
 

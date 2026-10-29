@@ -10,6 +10,14 @@ import '../metronome/metronome_audio.dart';
 import '../metronome/metronome_audio_factory.dart';
 import '../metronome/metronome_controller.dart';
 import 'drum_pattern.dart';
+import '../looper/loop_audio.dart';
+import '../jam_recording/shared_loop_input.dart';
+import '../jam_recording/recording_audio.dart';
+import '../jam_recording/jam_recorder.dart';
+import '../jam_recording/save_recording.dart';
+import '../metronome/metronome_pattern.dart';
+import 'dart:async';
+import 'dart:typed_data';
 
 class DrumsPage extends StatefulWidget {
   const DrumsPage({
@@ -17,10 +25,14 @@ class DrumsPage extends StatefulWidget {
     this.audio,
     this.looperController,
     this.effectsBackend,
+    this.recordingInput,
+    this.previewFactory,
   });
   final EffectsBackend? effectsBackend;
   final LooperController? looperController;
   final MetronomeAudio? audio;
+  final LoopInput? recordingInput;
+  final PositionedLoopAudio Function()? previewFactory;
 
   @override
   State<DrumsPage> createState() => _DrumsPageState();
@@ -28,6 +40,75 @@ class DrumsPage extends StatefulWidget {
 
 class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
   late final MetronomeController _controller;
+  final _recordingOutputs = <RecordingAudio>{};
+  late final SharedLoopInput _sharedInput;
+  late final LooperController _looper;
+  late final JamRecorder _recorder;
+  bool _saving = false;
+  String? _savedPath;
+  MetronomeAudio? _preview;
+  Timer? _previewEnd;
+  int _previewGeneration = 0;
+  bool _previewing = false;
+
+  void _stopPreview() {
+    ++_previewGeneration;
+    _previewEnd?.cancel();
+    final audio = _preview;
+    _preview = null;
+    _previewing = false;
+    if (audio != null) {
+      audio.silence();
+      unawaited(audio.dispose());
+    }
+  }
+
+  Future<void> _playPreview() async {
+    _stopPreview();
+    final buffer = _recorder.buffer;
+    if (buffer == null || buffer.length == 0) return;
+    final audio = _preview = widget.previewFactory?.call() ?? createLoopAudio();
+    final generation = _previewGeneration;
+    setState(() => _previewing = true);
+    try {
+      await audio.unlock();
+      if (!mounted || generation != _previewGeneration) return;
+      final samples = Float32List(buffer.length);
+      for (var i = 0; i < samples.length; i++) {
+        samples[i] = buffer.sampleAt(i) / 32768;
+      }
+      await audio.prepare(
+        MetronomePattern.rendered(
+          bpm: 100,
+          beats: 4,
+          sampleRate: 48000,
+          framesPerBeat: buffer.length ~/ 4,
+          samples: samples,
+        ),
+      );
+      if (!mounted || generation != _previewGeneration) return;
+      audio.play();
+      _previewEnd = Timer(
+        Duration(microseconds: buffer.length * 1000000 ~/ 48000),
+        () {
+          _stopPreview();
+          if (mounted) setState(() {});
+        },
+      );
+    } catch (_) {
+      if (mounted && generation == _previewGeneration) {
+        _stopPreview();
+        setState(() => _savedPath = '试听失败，录音仍可保存。');
+      }
+    }
+  }
+
+  RecordingAudio _tap(MetronomeAudio audio) {
+    final tap = RecordingAudio(audio, _recordingOutputs.remove);
+    _recordingOutputs.add(tap);
+    return tap;
+  }
+
   late final _effectsBackend = widget.effectsBackend ?? EffectsBackend();
   final _looperKey = GlobalKey();
   final _drumKey = GlobalKey();
@@ -49,8 +130,19 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _load(drumPresets.first);
+    _sharedInput = SharedLoopInput(
+      widget.recordingInput ??
+          (_effectsBackend.supported
+              ? EffectsLoopInput(_effectsBackend)
+              : RecorderLoopInput()),
+    );
+    _looper =
+        widget.looperController ??
+        LooperController(_sharedInput.lease(), () => _tap(createLoopAudio()));
+    _recorder = JamRecorder(_sharedInput.lease(), _recordingOutputs)
+      ..addListener(_refresh);
     _controller = MetronomeController(
-      widget.audio ?? createMetronomeAudio(),
+      _tap(widget.audio ?? createMetronomeAudio()),
       patternBuilder: (bpm) => renderDrums(bpm, _hits, _muted, _swing),
     )..addListener(_refresh);
     WidgetsBinding.instance.addObserver(this);
@@ -64,7 +156,11 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) _controller.stop();
+    if (state != AppLifecycleState.resumed) {
+      _controller.stop();
+      _recorder.stop();
+      _stopPreview();
+    }
   }
 
   @override
@@ -72,6 +168,11 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _controller.removeListener(_refresh);
     _controller.dispose();
+    _recorder.removeListener(_refresh);
+    _recorder.dispose();
+    _stopPreview();
+    if (widget.looperController == null) _looper.dispose();
+    _sharedInput.dispose();
     super.dispose();
   }
 
@@ -88,9 +189,9 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
             backgroundColor: scheme.surfaceContainerLowest,
             title: const Text('即兴工作台'),
             actions: [
-              if (_capturing)
+              if (_capturing || _recorder.recording)
                 Tooltip(
-                  message: '麦克风采集中，非录音时丢弃输入',
+                  message: '音频输入正在使用',
                   child: Padding(
                     padding: EdgeInsets.symmetric(horizontal: 12),
                     child: Icon(
@@ -111,7 +212,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                         '先选一个鼓机律动，点击开始伴奏；再用 Looper 录下吉他并逐层叠录。\n\n'
                         '点击鼓件名称可静音，点击格子编辑十六分音符。修改鼓机参数会从首拍重启。窄屏用拍号分页查看全部鼓点。\n\n'
                         '录音与鼓机独立循环，不自动对拍。下方效果器会静音检测引擎和声卡，手动开始监听；鼓机音量、Looper 回放音量与效果器输出音量可独立调节。Android / iOS / Linux / Windows 的 Looper 录入效果器处理后的声音，需先开始监听并设为 48 kHz；其他平台录原始输入。请用耳机避免伴奏串入录音。\n\n'
-                        '进入后台会停止播放与采集；离开工作台清空录音和设置。声音受系统音量影响，蓝牙可能增加延迟。',
+                        '顶部“即兴录音”可录下三路混音，内存满后覆盖最早片段；停止后可试听或保存 WAV。进入后台会停止播放与采集；离开工作台清空未保存录音和设置。声音受系统音量影响，蓝牙可能增加延迟。',
                       ),
                     ),
                     actions: [
@@ -146,10 +247,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                 );
                 final loop = LooperPanel(
                   key: _looperKey,
-                  controller: widget.looperController,
-                  input: _effectsBackend.supported
-                      ? EffectsLoopInput(_effectsBackend)
-                      : null,
+                  controller: _looper,
+                  wetInput: _effectsBackend.supported,
                   compact: compact,
                   landscape: landscape,
                   onCaptureChanged: (capturing) {
@@ -167,6 +266,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          _recordingPanel(context),
+                          const SizedBox(height: 16),
                           if (wide)
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -195,6 +296,116 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
               },
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _recordingPanel(BuildContext context) {
+    final r = _recorder;
+    final active = r.recording || r.starting;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('即兴录音', style: Theme.of(context).textTheme.titleLarge),
+            const Text('录下鼓机、Looper 与演奏。容量用满后覆盖最早片段。新录音会替换未保存的片段。'),
+            Text(
+              '录音内存 · 最长约 ${(r.memoryMiB * 1024 * 1024 / 96000 / 60).toStringAsFixed(1)} 分钟',
+            ),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  width: 180,
+                  child: DropdownButton<int>(
+                    isExpanded: true,
+                    value: r.memoryMiB,
+                    items: [
+                      for (final size in [8, 16, 32, 64, 128])
+                        DropdownMenuItem(
+                          value: size,
+                          child: Text(
+                            '$size MiB',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: active || _saving
+                        ? null
+                        : (size) => setState(() => r.memoryMiB = size!),
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: _saving
+                      ? null
+                      : active
+                      ? r.stop
+                      : () {
+                          _stopPreview();
+                          _savedPath = null;
+                          r.start();
+                        },
+                  icon: Icon(active ? Icons.stop : Icons.fiber_manual_record),
+                  label: Text(
+                    r.starting
+                        ? '取消准备'
+                        : r.recording
+                        ? '停止录音'
+                        : '开始录音',
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: active || _saving || (r.buffer?.length ?? 0) == 0
+                      ? null
+                      : () {
+                          if (_previewing) {
+                            setState(_stopPreview);
+                          } else {
+                            _playPreview();
+                          }
+                        },
+                  icon: Icon(_previewing ? Icons.stop : Icons.play_arrow),
+                  label: Text(_previewing ? '停止试听' : '试听录音'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: active || _saving || (r.buffer?.length ?? 0) == 0
+                      ? null
+                      : () async {
+                          setState(() => _saving = true);
+                          try {
+                            final path = await saveRecording(r.buffer!.toWav());
+                            if (mounted) setState(() => _savedPath = path);
+                          } catch (_) {
+                            if (mounted) {
+                              setState(
+                                () => _savedPath = '保存失败，请检查存储空间后重试；录音仍在内存中。',
+                              );
+                            }
+                          } finally {
+                            if (mounted) setState(() => _saving = false);
+                          }
+                        },
+                  icon: const Icon(Icons.save_alt),
+                  label: Text(_saving ? '保存中…' : '保存'),
+                ),
+              ],
+            ),
+            Text(
+              '已保留 ${((r.buffer?.length ?? 0) / 48000).toStringAsFixed(1)} 秒${(r.buffer?.totalFrames ?? 0) > (r.buffer?.length ?? 0) ? ' · 正在保留最近片段' : ''}',
+            ),
+            if (r.error != null)
+              Text(
+                r.error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            if (_savedPath != null) SelectableText(_savedPath!),
+            const Text('支持效果器的平台需先开始监听（48 kHz）；演奏录入效果链后的声音，不受监听音量影响。请用耳机避免串音。'),
+          ],
         ),
       ),
     );

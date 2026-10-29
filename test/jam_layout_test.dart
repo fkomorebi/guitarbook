@@ -139,7 +139,7 @@ void main() {
     expect(audio.gain, 0.4);
     expect(effects.calls.where((c) => c == 'probe'), hasLength(1));
     expect(effects.calls.where((c) => c == 'start'), hasLength(1));
-    expect(find.byTooltip('麦克风采集中，非录音时丢弃输入'), findsOneWidget);
+    expect(find.byTooltip('音频输入正在使用'), findsOneWidget);
     tester.view.physicalSize = const Size(1280, 720);
     await tester.pump();
     expect(c.recording, isTrue);

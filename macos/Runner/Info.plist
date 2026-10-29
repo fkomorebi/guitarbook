@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>用于实时分析吉他音高，帮助调音；音频不会保存或上传。</string>
+	<string>用于吉他调音、Looper 和即兴录音；仅在手动保存录音时写入本机文件，不上传音频。</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
