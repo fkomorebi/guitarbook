@@ -354,6 +354,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
               children: [
                 for (final effect in const [
                   ('fuzz', 'Fuzz 法兹'),
+                  ('wah', '哇音 Wah'),
                   ('compressor', '压缩'),
                   ('reverb', '混响'),
                   ('overdrive', '过载'),
@@ -516,6 +517,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
   Color _effectColor(dynamic kind) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return switch (kind) {
+      'wah' => Color(dark ? 0xFFF2BBCE : 0xFF913E60),
       'fuzz' => Color(dark ? 0xFFFFB59A : 0xFFA34225),
       'compressor' => Color(dark ? 0xFFE4CD83 : 0xFF80651A),
       'reverb' => Color(dark ? 0xFFCAB8EF : 0xFF71529C),

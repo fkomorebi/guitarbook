@@ -340,6 +340,7 @@ class _Pedal extends StatelessWidget {
       'amp_chime' => (const Color(0xFF8B683D), 'UK CHIME', '英式清脆 / 箱头'),
       'amp_crunch' => (const Color(0xFF776137), 'UK CRUNCH', '英式摇滚 / 箱头'),
       'amp_modern' => (const Color(0xFF575666), 'MODERN', '现代高增益 / 箱头'),
+      'wah' => (const Color(0xFF913E60), 'WAH', '扫频共振 / 哇音'),
       'fuzz' => (const Color(0xFFB84B32), 'FUZZ', '粗粝颗粒 / 法兹'),
       'compressor' => (const Color(0xFF81611E), 'COMP', '动态控制 / 压缩'),
       'reverb' => (const Color(0xFF625383), 'REVERB', '空间漫游 / 混响'),
@@ -464,22 +465,46 @@ class _Pedal extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 16),
+                  if (kind == 'wah' && parameters.length > 4)
+                    Material(
+                      type: MaterialType.transparency,
+                      child: SwitchListTile(
+                        key: ValueKey('wah-mode-$index'),
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          (parameters[4]['value'] as num) >= 0.5 ? '自动' : '手动',
+                          style: const TextStyle(color: Color(0xFFFFF3D8)),
+                        ),
+                        value: (parameters[4]['value'] as num) >= 0.5,
+                        onChanged: enabled
+                            ? (value) {
+                                onParameterStart();
+                                onParameter(4, value ? 1 : 0);
+                                onParameterEnd();
+                              }
+                            : null,
+                      ),
+                    ),
                   Wrap(
                     alignment: WrapAlignment.center,
                     spacing: 6,
                     runSpacing: 14,
                     children: [
                       for (var p = 0; p < parameters.length; p++)
-                        PedalKnob(
-                          key: ValueKey('$index-$kind-$p'),
-                          parameter: Map<String, dynamic>.from(
-                            parameters[p] as Map,
+                        if (kind != 'wah' ||
+                            (p != 4 &&
+                                (p < 5 ||
+                                    (parameters[4]['value'] as num) >= 0.5)))
+                          PedalKnob(
+                            key: ValueKey('$index-$kind-$p'),
+                            parameter: Map<String, dynamic>.from(
+                              parameters[p] as Map,
+                            ),
+                            enabled: enabled,
+                            onStart: onParameterStart,
+                            onChanged: (value) => onParameter(p, value),
+                            onEnd: onParameterEnd,
                           ),
-                          enabled: enabled,
-                          onStart: onParameterStart,
-                          onChanged: (value) => onParameter(p, value),
-                          onEnd: onParameterEnd,
-                        ),
                     ],
                   ),
                   if (kind == 'vst3')

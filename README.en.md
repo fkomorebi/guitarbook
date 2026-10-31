@@ -8,7 +8,7 @@ A Flutter guitar toolkit for practicing and improvising: build a groove with the
 
 - **Drum machine:** 12 simplified practice grooves—rock, funk, blues, pop, folk, punk, metal, disco, reggae, hip-hop, jazz swing and Latin. Edit kick, snare and hi-hat in a one-bar, 16-step 4/4 sequencer; set 30–240 BPM, swing, track mutes and playback volume.
 - **Looper:** record a first loop from 0.3 to 30 seconds and build up to 6 layers. Undo the latest layer, stop/resume or clear everything. Smart first-layer recording measures background noise, starts when you play and trims the ends after about two seconds of silence. Bind keyboard keys or a USB footswitch that sends keyboard input.
-- **Live effects:** fuzz, compressor, reverb, overdrive and delay, plus four original amp styles: American clean, British chime, British rock and modern high gain. Chain up to 8 instances, drag to reorder, adjust independent parameters and bypass pedals. Linux and Windows also load locally installed, compatible VST3 effects.
+- **Live effects:** fuzz, compressor, reverb, overdrive, delay and switchable manual/automatic wah, plus four original amp styles: American clean, British chime, British rock and modern high gain. Chain up to 8 instances, drag to reorder, adjust independent parameters and bypass pedals. Linux and Windows also load locally installed, compatible VST3 effects.
 - **One workspace:** open the drum machine from the home screen to access drums, Looper and effects together, with separate volume controls. On Android, iOS, Linux and Windows, the Looper captures the processed signal after the effects chain; monitoring must be active and the actual sample rate must be 48 kHz.
 
 The toolkit also includes a standard-tuning guitar tuner, metronome, scale fretboard and beginner chord lessons. README translations do not imply a translated app interface.
@@ -34,6 +34,8 @@ Implementation and verification are separate. Existing platform projects do not 
 4. Default shortcuts: **Space** records/overdubs, **S** stops/resumes, **Z** undoes the latest layer, **X** clears all layers. Customize bindings in Looper settings; the app must have focus. Smart recording applies only to the first layer.
 
 Use headphones to avoid feedback and recording the backing track. Drums require no microphone permission; recording, tuning and live effects require audio-input access. Android requires API 24 or later. Apple platforms require microphone permission; Windows must allow microphone access. Linux raw-input recording requires `parecord`, `pactl` and `ffmpeg`. Web requires HTTPS or localhost, microphone permission and a user gesture to unlock audio.
+
+Add “哇音 Wah” and drag its position knob to sweep 350–2200 Hz (position 0–1, default 0.5). Resonance Q is 0.5–8 (2), mix 0–1 (1), and output 0–1 (0.7). Switch between manual (default) and automatic modes on the pedal. Automatic mode exposes speed (0.1–5 Hz, default 1) and depth (0–1, default 0.8), sweeping around the position setting. Expression-pedal control is not included. Wah shares Android/iOS/Linux/Windows DSP; device listening remains unverified.
 
 Mobile effects use the current system audio route and mono input, with no in-app route picker or external VST3 support. Desktop device settings allow input/output and buffer selection; Windows does not bundle the ASIO SDK. Bluetooth is not a low-latency reference output.
 

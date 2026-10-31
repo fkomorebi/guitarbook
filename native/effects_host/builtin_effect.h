@@ -27,6 +27,15 @@ public:
             add("treble", "高频", -12, 12, 0, "dB");
             add("master", "主音量", 0, 1, 0.5f, "");
             add("cab", "箱体", 0, 1, 1, "");
+        } else if (kind == "wah") {
+            title = juce::String::fromUTF8("哇音 Wah");
+            add("position", "位置", 0, 1, 0.5f, "");
+            add("resonance", "共振", 0.5f, 8, 2, "Q");
+            add("mix", "干湿比", 0, 1, 1, "");
+            add("level", "输出", 0, 1, 0.7f, "");
+            add("auto", "自动", 0, 1, 0, "");
+            add("speed", "速度", 0.1f, 5, 1, "Hz");
+            add("depth", "深度", 0, 1, 0.8f, "");
         } else if (kind == "compressor") {
             title = juce::String::fromUTF8("压缩 Compressor");
             add("threshold", "阈值", -60, 0, -24, "dB");
@@ -54,7 +63,9 @@ public:
             smooth[i].reset(rate, 0.02);
             smooth[i].setCurrentAndTargetValue(parameters[i]->get());
         }
+        wahPhase = 0;
         toneState.fill(0);
+        for (auto& state : wahState) state.fill(0);
         for (auto& state : ampState) state.fill(0);
         dcInput.fill(0);
         dcOutput.fill(0);
@@ -81,7 +92,7 @@ public:
             return;
         }
         for (int sample = 0; sample < samples; ++sample) {
-            std::array<float, 6> values{};
+            std::array<float, 8> values{};
             for (size_t i = 0; i < parameters.size(); ++i) values[i] = smooth[i].getNextValue();
             if (model >= 0) {
                 const auto coefficient = [this](float hz) {
@@ -114,6 +125,27 @@ public:
                     dcInput[static_cast<size_t>(ch)] = x;
                     dcOutput[static_cast<size_t>(ch)] = filtered;
                     audio.setSample(ch, sample, filtered * values[4]);
+                }
+            } else if (kind == "wah") {
+                // TPT state-variable bandpass, normalized by Q to bound resonance gain.
+                const float sweep = juce::jlimit(0.0f, 1.0f, values[0] +
+                    0.5f * values[6] * static_cast<float>(std::sin(wahPhase)));
+                const float positionValue = values[0] + values[4] * (sweep - values[0]);
+                wahPhase += juce::MathConstants<double>::twoPi * values[5] / rate;
+                if (wahPhase >= juce::MathConstants<double>::twoPi) wahPhase -= juce::MathConstants<double>::twoPi;
+                const float frequency = 350.0f * std::pow(2200.0f / 350.0f, positionValue);
+                const float g = std::tan(juce::MathConstants<float>::pi * frequency / static_cast<float>(rate));
+                const float k = 1.0f / values[1];
+                const float a1 = 1.0f / (1.0f + g * (g + k));
+                for (int ch = 0; ch < 2; ++ch) {
+                    auto& state = wahState[static_cast<size_t>(ch)];
+                    const float input = audio.getSample(ch, sample);
+                    const float v3 = input - state[1];
+                    const float band = a1 * (state[0] + g * v3);
+                    const float low = state[1] + g * band;
+                    state[0] = 2 * band - state[0];
+                    state[1] = 2 * low - state[1];
+                    audio.setSample(ch, sample, (input * (1 - values[2]) + k * band * values[2]) * values[3]);
                 }
             } else if (kind == "compressor") {
                 const float peak = juce::jmax(std::abs(audio.getSample(0, sample)), std::abs(audio.getSample(1, sample)));
@@ -209,12 +241,14 @@ private:
     }
     juce::String title;
     std::vector<juce::AudioParameterFloat*> parameters;
-    std::array<juce::SmoothedValue<float>, 6> smooth;
+    std::array<juce::SmoothedValue<float>, 8> smooth;
     std::array<float, 2> toneState{}, dcInput{}, dcOutput{};
     juce::AudioBuffer<float> delayBuffer;
     juce::Reverb reverb;
     double rate = 48000;
     std::array<std::array<float, 5>, 2> ampState{};
+    std::array<std::array<float, 2>, 2> wahState{};
+    double wahPhase = 0;
     int model = -1;
     float envelope = 0;
     int position = 0;

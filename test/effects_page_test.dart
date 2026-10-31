@@ -40,6 +40,7 @@ class FakeEffects extends EffectsBackend {
       final kind = arguments['kind'] as String;
       plugins.add({
         'name': {
+          'wah': '哇音 Wah',
           'fuzz': 'Fuzz 法兹',
           'compressor': '压缩 Compressor',
           'reverb': '混响 Reverb',
@@ -52,7 +53,26 @@ class FakeEffects extends EffectsBackend {
         }[kind],
         'kind': kind,
         'bypass': false,
-        'parameters': kind.startsWith('amp_')
+        'parameters': kind == 'wah'
+            ? [
+                for (final item in [
+                  ('位置', 0.0, 1.0, 0.5, ''),
+                  ('共振', 0.5, 8.0, 2.0, 'Q'),
+                  ('干湿比', 0.0, 1.0, 1.0, ''),
+                  ('输出', 0.0, 1.0, 0.7, ''),
+                  ('自动', 0.0, 1.0, 0.0, ''),
+                  ('速度', 0.1, 5.0, 1.0, 'Hz'),
+                  ('深度', 0.0, 1.0, 0.8, ''),
+                ])
+                  {
+                    'name': item.$1,
+                    'min': item.$2,
+                    'max': item.$3,
+                    'value': item.$4,
+                    'unit': item.$5,
+                  },
+              ]
+            : kind.startsWith('amp_')
             ? [
                 {
                   'name': '增益',
@@ -158,6 +178,89 @@ class MobileEffects extends FakeEffects {
 }
 
 void main() {
+  testWidgets('自动哇音在窄屏双倍字号可调节深度', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    await backend.send('builtin', {'kind': 'wah'});
+    backend.plugins[0]['parameters'][4]['value'] = 1.0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: EffectsPage(backend: backend),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final depth = find.byKey(const ValueKey('0-wah-6'));
+    await tester.scrollUntilVisible(
+      depth,
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.ensureVisible(depth);
+    await tester.pumpAndSettle();
+    await tester.drag(depth, const Offset(0, 40));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(backend.plugins[0]['parameters'][6]['value'], lessThan(0.8));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('哇音可重复添加，位置独立调节与旁通', (tester) async {
+    final backend = FakeEffects();
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 2; i++) {
+      final button = find.widgetWithText(OutlinedButton, '哇音 Wah');
+      await tester.ensureVisible(button);
+      await tester.pumpAndSettle();
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+    }
+    expect(backend.plugins.map((p) => p['kind']), ['wah', 'wah']);
+    final position = find.byKey(const ValueKey('0-wah-0'));
+    await tester.ensureVisible(position);
+    await tester.pumpAndSettle();
+    await tester.drag(position, const Offset(0, -60));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(backend.plugins[0]['parameters'][0]['value'], greaterThan(0.5));
+    expect(backend.plugins[1]['parameters'][0]['value'], 0.5);
+    final mode = find.byKey(const ValueKey('wah-mode-0'));
+    await tester.ensureVisible(mode);
+    await tester.pumpAndSettle();
+    await tester.tap(mode);
+    await tester.pumpAndSettle();
+    expect(backend.plugins[0]['parameters'][4]['value'], 1);
+    expect(backend.plugins[1]['parameters'][4]['value'], 0);
+    expect(find.byKey(const ValueKey('0-wah-5')), findsOneWidget);
+    await tester.tap(mode);
+    await tester.pumpAndSettle();
+    expect(backend.plugins[0]['parameters'][4]['value'], 0);
+    expect(find.byKey(const ValueKey('0-wah-5')), findsNothing);
+    final footswitch = find.byKey(const ValueKey('pedal-switch-0'));
+    await tester.ensureVisible(footswitch);
+    await tester.pumpAndSettle();
+    await tester.tap(footswitch);
+    await tester.pump();
+    expect(backend.plugins[0]['bypass'], isTrue);
+    expect(backend.running, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
     'mobile keeps builtins and wet workbench, hides desktop controls',
     (tester) async {
