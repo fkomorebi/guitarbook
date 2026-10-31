@@ -197,4 +197,96 @@ void main() {
       await shared.dispose();
     },
   );
+
+  test(
+    'engine position quantization does not tear the source timeline',
+    () async {
+      // SoLoud advances a voice's stream position one whole mix buffer per mix
+      // call (soloud.cpp: mStreamPosition += buffertime), so the position Dart
+      // reads jumps in steps of 512 frames (~10.7 ms), and which step an input
+      // block sees depends on when that block happens to arrive. A long linear
+      // ramp lets us recover the source phase of every recorded sample, which
+      // must advance with the recorded frames instead of jumping per block.
+      const period = 1 << 17;
+      const slope = 2 / period;
+      final ramp = Float32List.fromList([
+        for (var i = 0; i < period; i++) i * slope - 1,
+      ]);
+      final output = FakeOutput();
+      final tap = RecordingAudio(output, (_) {});
+      await tap.prepare(
+        MetronomePattern.rendered(
+          bpm: 100,
+          beats: 4,
+          sampleRate: 48000,
+          framesPerBeat: period ~/ 4,
+          samples: ramp,
+        ),
+      );
+      tap.play();
+
+      const chunkFrames = [960, 1024, 912, 1088, 1000, 896, 1056, 944];
+      // First arrival is large enough for the block to start on a positive
+      // phase, so the recovered ramp index never wraps during this test.
+      const arrivalFrames = [1200, 1040, 640, 900, 1150, 800, 1000, 690];
+      final recorded = <double>[];
+      var consumed = 0;
+      for (var k = 0; k < 48; k++) {
+        final frames = chunkFrames[k % chunkFrames.length];
+        final reported =
+            ((consumed + arrivalFrames[k % arrivalFrames.length]) ~/ 512) * 512;
+        output.offset = Duration(microseconds: reported * 1000000 ~/ 48000);
+        final block = tap.block(frames);
+        for (var i = 0; i < frames; i++) {
+          recorded.add(block(i));
+        }
+        consumed += frames;
+      }
+
+      // Source phase of sample [i] in source frames, recovered from the ramp.
+      double phaseAt(int i) => (recorded[i] + 1) / slope;
+      var worstStep = 0.0;
+      for (var i = 1; i < recorded.length; i++) {
+        final step = phaseAt(i) - phaseAt(i - 1);
+        final error = (step - 1).abs();
+        if (error > worstStep) worstStep = error;
+      }
+      // Re-anchoring on every block moved the recorded timeline by up to a
+      // whole mix buffer at each block boundary, which is heard as a torn,
+      // smeared mix. Advancing by the recorded frames leaves only the slow
+      // (inaudible) drift correction.
+      expect(worstStep, lessThan(8));
+      await tap.dispose();
+    },
+  );
+
+  test(
+    'a discontinuous engine position re-anchors instead of smearing',
+    () async {
+      const period = 4096;
+      final ramp = Float32List.fromList([
+        for (var i = 0; i < period; i++) i / period * 2 - 1,
+      ]);
+      final output = FakeOutput();
+      final tap = RecordingAudio(output, (_) {});
+      await tap.prepare(
+        MetronomePattern.rendered(
+          bpm: 100,
+          beats: 4,
+          sampleRate: 48000,
+          framesPerBeat: period ~/ 4,
+          samples: ramp,
+        ),
+      );
+      tap.play();
+      output.offset = const Duration(milliseconds: 20);
+      tap.block(960);
+      // A full-second jump cannot be tracked by slow drift correction; the
+      // timeline has to restart from the reported position.
+      output.offset = const Duration(milliseconds: 1020);
+      const start = 1020 * 48 - 960; // position frames minus one block
+      expect(tap.block(960)(0), closeTo(ramp[start % period], .000001));
+      await tap.dispose();
+    },
+  );
 }
