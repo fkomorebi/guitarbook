@@ -5,6 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:guitarbook/features/effects/effects_backend.dart';
 import 'package:guitarbook/features/effects/effects_page.dart';
 import 'package:guitarbook/features/effects/pedal_board.dart';
+import 'package:guitarbook/features/expression_pedal/gamepad_trigger.dart';
+
+import 'support/fake_gamepad_trigger_source.dart';
 
 class FakeEffects extends EffectsBackend {
   final calls = <String>[];
@@ -175,6 +178,12 @@ class MobileEffects extends FakeEffects {
     'cpuAvailable': false,
     'outputBufferFrames': 192,
   };
+}
+
+/// 把效果器页滚动到能看见 [finder] 的位置。
+Future<void> _scrollTo(WidgetTester tester, Finder finder) async {
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -671,6 +680,228 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('补偿'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('手柄扳机可以连续驱动哇音位置', (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    await backend.send('builtin', {'kind': 'wah'});
+    final source = FakeGamepadTriggerSource();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: EffectsPage(backend: backend, pedalSource: source),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(const ValueKey('expression-pedal-enabled'));
+    await _scrollTo(tester, toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(source.startCalls, [PedalTrigger.right]);
+    expect(find.textContaining('正在查找手柄'), findsOneWidget);
+
+    source.push(
+      const GamepadSnapshot(
+        status: GamepadInputStatus.ready,
+        deviceName: 'Xbox 手柄',
+        rawValue: 0,
+        rawMin: 0,
+        rawMax: 255,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('已连接：Xbox 手柄'), findsOneWidget);
+
+    source.push(
+      const GamepadSnapshot(
+        status: GamepadInputStatus.ready,
+        deviceName: 'Xbox 手柄',
+        rawValue: 204,
+        rawMin: 0,
+        rawMax: 255,
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+    await tester.pump();
+
+    final parameterRequests = backend.requests
+        .where((request) => request['command'] == 'parameter')
+        .toList();
+    expect(parameterRequests, isNotEmpty);
+    expect(parameterRequests.last['index'], 0);
+    expect(parameterRequests.last['parameter'], 0);
+    expect(parameterRequests.last['value'] as double, closeTo(0.8, 0.01));
+    expect(
+      backend.plugins[0]['parameters'][0]['value'] as double,
+      closeTo(0.8, 0.01),
+    );
+    final valueText = tester.widget<Text>(
+      find.byKey(const ValueKey('expression-pedal-value')),
+    );
+    expect(valueText.data, '80%');
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+    expect(source.disposeCalls, 1);
+  });
+
+  testWidgets('目标哇音处于自动模式时不写入位置', (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    await backend.send('builtin', {'kind': 'wah'});
+    backend.plugins[0]['parameters'][4]['value'] = 1.0;
+    final source = FakeGamepadTriggerSource();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: EffectsPage(backend: backend, pedalSource: source),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(const ValueKey('expression-pedal-enabled'));
+    await _scrollTo(tester, toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    source.push(
+      const GamepadSnapshot(
+        status: GamepadInputStatus.ready,
+        deviceName: 'Xbox 手柄',
+        rawValue: 200,
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+    await tester.pump();
+
+    expect(
+      backend.requests.where((request) => request['command'] == 'parameter'),
+      isEmpty,
+    );
+    expect(find.textContaining('自动扫频模式'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('没有哇音时启用手柄踏板也不写入效果链', (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    final source = FakeGamepadTriggerSource();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: EffectsPage(backend: backend, pedalSource: source),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(const ValueKey('expression-pedal-enabled'));
+    await _scrollTo(tester, toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('先在效果链中添加'), findsOneWidget);
+    source.push(
+      const GamepadSnapshot(
+        status: GamepadInputStatus.ready,
+        deviceName: 'Xbox 手柄',
+        rawValue: 120,
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+    await tester.pump();
+
+    expect(
+      backend.requests.where((request) => request['command'] == 'parameter'),
+      isEmpty,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('不支持的平台只显示说明，不显示启用开关', (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    final source = FakeGamepadTriggerSource()..supported = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: EffectsPage(backend: backend, pedalSource: source),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _scrollTo(tester, find.text('手柄线性扳机 → 哇音踏板'));
+
+    expect(
+      find.byKey(const ValueKey('expression-pedal-enabled')),
+      findsNothing,
+    );
+    expect(find.textContaining('不支持读取手柄'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('手柄踏板在窄屏双倍字号下可操作且不溢出', (tester) async {
+    tester.view.physicalSize = const Size(320, 4000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    await backend.send('builtin', {'kind': 'wah'});
+    final source = FakeGamepadTriggerSource();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: EffectsPage(backend: backend, pedalSource: source),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(const ValueKey('expression-pedal-enabled'));
+    await _scrollTo(tester, toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    source.push(
+      const GamepadSnapshot(
+        status: GamepadInputStatus.ready,
+        deviceName: 'Xbox 手柄',
+        rawValue: 128,
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+
+    final trigger = find.byKey(const ValueKey('expression-pedal-trigger'));
+    await _scrollTo(tester, trigger);
+    expect(trigger, findsOneWidget);
+    final calibrate = find.byKey(
+      const ValueKey('expression-pedal-calibrate-min'),
+    );
+    await _scrollTo(tester, calibrate);
+    expect(calibrate, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('expression-pedal-value')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

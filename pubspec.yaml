@@ -38,6 +38,8 @@ dependencies:
   record: ^7.1.2
   cupertino_icons: ^1.0.8
   path_provider: ^2.1.6
+  # 仅用于 Windows XInput 读取手柄扳机时的原生内存分配（calloc/free）。
+  ffi: ^2.2.0
 
 dev_dependencies:
   flutter_test:

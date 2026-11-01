@@ -2,15 +2,26 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../expression_pedal/expression_pedal_controller.dart';
+import '../expression_pedal/expression_pedal_panel.dart';
+import '../expression_pedal/gamepad_trigger.dart';
 import 'effects_backend.dart';
 import 'pedal_board.dart';
 
 class EffectsPage extends StatefulWidget {
-  const EffectsPage({super.key, this.backend, this.embedded = false});
+  const EffectsPage({
+    super.key,
+    this.backend,
+    this.embedded = false,
+    this.pedalSource,
+  });
 
   final bool embedded;
 
   final EffectsBackend? backend;
+
+  /// 可注入的手柄扳机输入；为空时按当前平台自动选择。
+  final GamepadTriggerSource? pedalSource;
 
   @override
   State<EffectsPage> createState() => _EffectsPageState();
@@ -28,6 +39,11 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
   bool _adjustingParameter = false;
   Timer? _parameterTimer;
   Map<String, dynamic>? _pendingParameter;
+  late final ExpressionPedalController _pedal;
+  int? _pedalTargetIndex;
+  Timer? _pedalTimer;
+  ({int index, double value})? _pendingPedalPosition;
+  double _lastPedalSent = -1;
   bool _connected = false;
   bool _available = false;
   int _lifecycleRevision = 0;
@@ -40,6 +56,8 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _pedal = ExpressionPedalController(source: widget.pedalSource);
+    _pedal.addListener(_onPedalChanged);
     if (_backend.supported) {
       unawaited(_send(widget.embedded ? 'probe' : 'start'));
     }
@@ -61,6 +79,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
       if (mounted && revision == _revision) {
         setState(() {
           _status = status;
+          _pedalTargetIndex = _validPedalTarget(_pedalTargetIndex);
           if (status['failed'] == true) _error = '音频设备已中断，请检查连接后重新开始监听。';
         });
       }
@@ -94,6 +113,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
       setState(() {
         _connected = true;
         _status = status;
+        _pedalTargetIndex = _validPedalTarget(_pedalTargetIndex);
         if (command == 'probe') _available = status['available'] == true;
         _error = null;
       });
@@ -126,12 +146,122 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
       _backend
           .send('parameter', args)
           .then((status) {
-            if (mounted) setState(() => _status = status);
+            if (mounted) {
+              setState(() {
+                _status = status;
+                _pedalTargetIndex = _validPedalTarget(_pedalTargetIndex);
+              });
+            }
           })
           .catchError((Object error) {
             if (mounted) setState(() => _error = '$error');
           }),
     );
+  }
+
+  /// 效果链里当前可被扳机控制的哇音。
+  List<WahTarget> get _wahTargets {
+    final targets = <WahTarget>[];
+    for (var index = 0; index < _plugins.length; index++) {
+      final plugin = _plugins[index] as Map;
+      if (plugin['kind'] != 'wah') continue;
+      targets.add(
+        WahTarget(index: index, name: '${plugin['name'] ?? '哇音 Wah'}'),
+      );
+    }
+    return targets;
+  }
+
+  /// 目标索引失效（哇音被移除或位置变化）时返回 null。
+  int? _validPedalTarget(int? index) {
+    if (index == null) return null;
+    if (index >= _plugins.length) return null;
+    final plugin = _plugins[index] as Map;
+    return plugin['kind'] == 'wah' ? index : null;
+  }
+
+  bool _pedalTargetIsAuto(int index) {
+    final plugin = _plugins[index] as Map;
+    final parameters = plugin['parameters'] as List? ?? const [];
+    if (parameters.length < 5) return false;
+    final auto = parameters[4] as Map;
+    return (auto['value'] as num? ?? 0).toDouble() >= 0.5;
+  }
+
+  int? get _effectivePedalTarget {
+    final index = _validPedalTarget(_pedalTargetIndex);
+    if (index == null || !_pedal.enabled || !_running) return null;
+    if (_pedal.rawValue == null) return null;
+    if (_pedalTargetIsAuto(index)) return null;
+    return index;
+  }
+
+  bool get _pedalTargetAutoMode {
+    final index = _validPedalTarget(_pedalTargetIndex);
+    return index == null ? false : _pedalTargetIsAuto(index);
+  }
+
+  void _onPedalChanged() {
+    final index = _effectivePedalTarget;
+    if (index == null || _adjustingParameter) {
+      _pendingPedalPosition = null;
+      return;
+    }
+    final value = _pedal.value;
+    if ((value - _lastPedalSent).abs() < 0.002) return;
+    _lastPedalSent = value;
+    _pendingPedalPosition = (index: index, value: value);
+    _pedalTimer ??= Timer(
+      const Duration(milliseconds: 25),
+      _flushPedalPosition,
+    );
+  }
+
+  void _flushPedalPosition() {
+    _pedalTimer?.cancel();
+    _pedalTimer = null;
+    final pending = _pendingPedalPosition;
+    _pendingPedalPosition = null;
+    if (pending == null) return;
+    // 从排队到真正发送之间，哇音可能被移除、切到自动模式或停止监听。
+    if (_effectivePedalTarget != pending.index) return;
+    unawaited(
+      _backend
+          .send('parameter', {
+            'index': pending.index,
+            'parameter': 0,
+            'value': pending.value,
+          })
+          .then((status) {
+            if (mounted) {
+              setState(() {
+                _status = status;
+                _pedalTargetIndex = _validPedalTarget(_pedalTargetIndex);
+              });
+            }
+          })
+          .catchError((Object error) {
+            if (mounted) setState(() => _error = '$error');
+          }),
+    );
+  }
+
+  Future<void> _setPedalEnabled(bool enabled) async {
+    if (enabled && _pedalTargetIndex == null) {
+      final targets = _wahTargets;
+      if (targets.isNotEmpty) {
+        setState(() => _pedalTargetIndex = targets.first.index);
+      }
+    }
+    _lastPedalSent = -1;
+    await _pedal.setEnabled(enabled);
+    if (enabled) _onPedalChanged();
+  }
+
+  void _setPedalTarget(int? index) {
+    setState(() => _pedalTargetIndex = index);
+    _lastPedalSent = -1;
+    _onPedalChanged();
   }
 
   @override
@@ -146,7 +276,12 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
           _backend
               .send('stop')
               .then((status) {
-                if (mounted) setState(() => _status = status);
+                if (mounted) {
+                  setState(() {
+                    _status = status;
+                    _pedalTargetIndex = _validPedalTarget(_pedalTargetIndex);
+                  });
+                }
               })
               .catchError((Object error) {
                 if (mounted) setState(() => _error = '$error');
@@ -161,6 +296,9 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _parameterTimer?.cancel();
+    _pedalTimer?.cancel();
+    _pedal.removeListener(_onPedalChanged);
+    _pedal.dispose();
     _path.dispose();
     unawaited(_backend.dispose());
     super.dispose();
@@ -387,7 +525,21 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
               onParameterEnd: () {
                 _adjustingParameter = false;
                 _flushParameter();
+                _onPedalChanged();
               },
+            ),
+            const SizedBox(height: 20),
+            ExpressionPedalPanel(
+              controller: _pedal,
+              canConfigure: supported && !_busy,
+              wahTargets: _wahTargets,
+              targetIndex: _pedalTargetIndex,
+              onTargetChanged: _setPedalTarget,
+              onEnabledChanged: (value) {
+                unawaited(_setPedalEnabled(value));
+              },
+              running: _running,
+              autoMode: _pedalTargetAutoMode,
             ),
             const SizedBox(height: 20),
             if (_backend.supportsVst3)

@@ -8,22 +8,22 @@ A Flutter guitar toolkit for practicing and improvising: build a groove with the
 
 - **Drum machine:** 12 simplified practice grooves—rock, funk, blues, pop, folk, punk, metal, disco, reggae, hip-hop, jazz swing and Latin. Edit kick, snare and hi-hat in a one-bar, 16-step 4/4 sequencer; set 30–240 BPM, swing, track mutes and playback volume.
 - **Looper:** record a first loop from 0.3 to 30 seconds and build up to 6 layers. Undo the latest layer, stop/resume or clear everything. Smart first-layer recording measures background noise, starts when you play and trims the ends after about two seconds of silence. Bind keyboard keys or a USB footswitch that sends keyboard input.
-- **Live effects:** fuzz, compressor, reverb, overdrive, delay and switchable manual/automatic wah, plus four original amp styles: American clean, British chime, British rock and modern high gain. Chain up to 8 instances, drag to reorder, adjust independent parameters and bypass pedals. Linux and Windows also load locally installed, compatible VST3 effects.
+- **Live effects:** fuzz, compressor, reverb, overdrive, delay and switchable manual/automatic wah, plus four original amp styles: American clean, British chime, British rock and modern high gain. Chain up to 8 instances, drag to reorder, adjust independent parameters and bypass pedals. Linux and Windows also load locally installed, compatible VST3 effects, and can use a gamepad's analog trigger as a wah expression pedal.
 - **One workspace:** open the drum machine from the home screen to access drums, Looper and effects together, with separate volume controls. On Android, iOS, Linux and Windows, the Looper captures the processed signal after the effects chain; monitoring must be active and the actual sample rate must be 48 kHz.
 
 The toolkit also includes a standard-tuning guitar tuner, metronome, scale fretboard and beginner chord lessons. README translations do not imply a translated app interface.
 
 ## Platform status
 
-Implementation and verification are separate. Existing platform projects do not guarantee device compatibility. Status below reflects the project records as of **2026-10-29**.
+Implementation and verification are separate. Existing platform projects do not guarantee device compatibility. Status below reflects the project records as of **2026-11-01**.
 
 | Platform | Drums / Looper / session recording | Live effects / processed recording | Recorded verification |
 | --- | --- | --- | --- |
 | Android | Integrated | Built-ins and amps | Debug APK built; basic permission, monitoring and background flows checked on an x86_64 emulator; real audio interfaces pending |
 | iOS | Integrated | Built-ins and amps | Native code integrated; Xcode build and device testing pending |
-| Windows | Integrated | Built-ins, amps and VST3 | Build and real-device testing pending |
+| Windows | Integrated | Built-ins, amps, VST3 and gamepad-trigger wah expression | Build and real-device testing pending (gamepad input layer not built or run) |
 | macOS | Integrated; raw-input recording | Unavailable | Build and device testing pending |
-| Linux | Integrated | Built-ins, amps and VST3 | Debug build, offline DSP and silent interface/buffer checks passed; real playing and physical round-trip latency pending |
+| Linux | Integrated | Built-ins, amps, VST3 and gamepad-trigger wah expression | Debug build, offline DSP and silent interface/buffer checks passed; real playing, gamepad hardware/permissions and physical round-trip latency pending |
 | Web | Integrated; raw-input recording | Unavailable | Release build passed; browser/device audio testing pending |
 
 ## Start playing
@@ -35,9 +35,17 @@ Implementation and verification are separate. Existing platform projects do not 
 
 Use headphones to avoid feedback and recording the backing track. Drums require no microphone permission; recording, tuning and live effects require audio-input access. Android requires API 24 or later. Apple platforms require microphone permission; Windows must allow microphone access. Linux raw-input recording requires `parecord`, `pactl` and `ffmpeg`. Web requires HTTPS or localhost, microphone permission and a user gesture to unlock audio.
 
-Add “哇音 Wah” and drag its position knob to sweep 350–2200 Hz (position 0–1, default 0.5). Resonance Q is 0.5–8 (2), mix 0–1 (1), and output 0–1 (0.7). Switch between manual (default) and automatic modes on the pedal. Automatic mode exposes speed (0.1–5 Hz, default 1) and depth (0–1, default 0.8), sweeping around the position setting. Expression-pedal control is not included. Wah shares Android/iOS/Linux/Windows DSP; device listening remains unverified.
+Add “哇音 Wah” and drag its position knob to sweep 350–2200 Hz (position 0–1, default 0.5). Resonance Q is 0.5–8 (2), mix 0–1 (1), and output 0–1 (0.7). Switch between manual (default) and automatic modes on the pedal. Automatic mode exposes speed (0.1–5 Hz, default 1) and depth (0–1, default 0.8), sweeping around the position setting. On Linux and Windows desktop, an optional gamepad analog trigger can drive the wah position as an expression pedal (see below). Wah shares Android/iOS/Linux/Windows DSP; device listening remains unverified.
 
 Mobile effects use the current system audio route and mono input, with no in-app route picker or external VST3 support. Desktop device settings allow input/output and buffer selection; Windows does not bundle the ASIO SDK. Bluetooth is not a low-latency reference output.
+
+## Gamepad trigger expression pedal (Linux / Windows)
+
+On Linux and Windows desktop, a gamepad's analog trigger can act as a wah expression pedal. The feature is off by default: add “哇音 Wah”, enable the “gamepad trigger → wah pedal” card below the pedalboard, choose the left or right trigger and the target wah instance, and optionally invert and calibrate its range. Trigger readings are written to the wah position parameter (350–2200 Hz) at a 25 ms throttle. Position is only written while the target wah is in manual mode, monitoring is running and a trigger reading exists; automatic wah mode, stopped monitoring, no wah in the chain or no selected target skip writes and explain why in the card. Disabling the switch or leaving the page releases the input device.
+
+Linux reads `/dev/input/event*` directly: gamepads with an analog trigger axis are discovered from `/proc/bus/input/devices`, hot-plug reconnection is supported, and the driver's actual axis range is read when available (commonly 0–255 or 0–1023). Most desktop distributions grant access to the logged-in user automatically; if access is denied, add the user to the `input` group (`sudo usermod -aG input $USER`, then log in again) or install a udev rule for the controller. Flatpak/Snap sandboxes may block `/dev/input`. Windows polls XInput for the left/right trigger (0–255) and recognises XInput-compatible (Xbox-family) controllers only; PlayStation controllers need Steam Input or DS4Windows mapping first. Android, iOS, macOS and Web do not read gamepad input and show an unsupported note.
+
+Verification (2026-11-01): static analysis passed; the full Flutter suite passes with 151 tests (42 new); a Linux debug build succeeded. Tests cover evdev event and `/proc` parsing, axis-range decoding, Linux input-layer errors and reconnection, normalisation/calibration/inversion, and the effects page's 25 ms throttled writes, automatic-mode skip, no-target and unsupported-platform hints, and a 320 px double-text-scale layout. This machine has no `/dev/input` and no physical gamepad, so the Linux input layer was verified with synthetic events and regular-file paths only; **real hardware, desktop permissions and listening results remain unverified**. The Windows input layer has not been built or run, and other platforms are not integrated. Bluetooth connections and third-party controller axis mappings are also unverified.
 
 ## Session recording
 
@@ -47,7 +55,7 @@ Native saves go to `Guitarbook Recordings` inside the application documents dire
 
 ## Current limits
 
-Drums and Looper run independently: there is no automatic beat synchronization, quantization or time stretching. Unsaved audio stays in local memory and is cleared when leaving the workspace; the session recorder can save a mixed WAV. Audio is not uploaded. Effect chains, device choices and workspace settings are not persisted. Backgrounding stops playback/monitoring; returning does not restart it automatically. No MIDI or global background shortcuts are integrated.
+Drums and Looper run independently: there is no automatic beat synchronization, quantization or time stretching. Unsaved audio stays in local memory and is cleared when leaving the workspace; the session recorder can save a mixed WAV. Audio is not uploaded. Effect chains, device choices and workspace settings are not persisted. Backgrounding stops playback/monitoring; returning does not restart it automatically. No MIDI or global background shortcuts are integrated. The gamepad trigger is used only for wah expression, not for Looper pedal bindings.
 
 Built-in amps use original algorithms and simple cabinet filtering, without IR convolution or oversampling. Third-party plugins must match the host OS and CPU architecture; they are not bundled. Driver-reported latency is not a physical round-trip measurement. Real-device sound, USB interface compatibility and long-running stability still need verification.
 
