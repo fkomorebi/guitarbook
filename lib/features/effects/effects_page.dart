@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../expression_pedal/expression_pedal_controller.dart';
@@ -331,6 +332,8 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
             Text(
               widget.embedded
                   ? '效果器与伴奏可同时使用。点击开始监听才会出声；Looper 录入效果器处理后的声音（48 kHz 单声道），已录层保留当时音色。请使用声卡有线耳机，关闭直通监听。'
+                  : kIsWeb
+                  ? '插上吉他，边弹边塑造音色。浏览器版需先点击「开始监听」并授权麦克风；请使用有线耳机并关闭声卡直通监听，避免回授与啸叫。'
                   : '插上吉他，边弹边塑造音色。进入即监听，效果可随时添加、旁通与调整。请使用声卡有线耳机，关闭直通监听。',
             ),
             if (widget.embedded && supported) ...[
@@ -355,7 +358,11 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
             ],
             if (!supported) ...[
               const SizedBox(height: 16),
-              const Text('此功能支持 Android、iOS、Linux 和 Windows；当前平台暂不支持。'),
+              Text(
+                kIsWeb
+                    ? '实时效果器仅电脑端浏览器支持（Chrome / Edge / Safari 桌面版）；移动端浏览器暂不支持。'
+                    : '此功能支持 Android、iOS、Linux、Windows 和电脑端浏览器；当前平台暂不支持。',
+              ),
             ],
             if (_backend.mobile) ...[
               const SizedBox(height: 12),

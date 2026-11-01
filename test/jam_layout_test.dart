@@ -186,7 +186,7 @@ void main() {
           );
         }
         expect(
-          find.text('此功能支持 Android、iOS、Linux 和 Windows；当前平台暂不支持。'),
+          find.text('此功能支持 Android、iOS、Linux、Windows 和电脑端浏览器；当前平台暂不支持。'),
           findsOneWidget,
         );
         expect(effects.calls, isEmpty);

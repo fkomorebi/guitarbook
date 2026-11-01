@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>RUNNING</title>
+</head>
+<body>
+<pre id="results">running...</pre>
+<script src="../web/effects_worklet.js"></script>
+<script>
+// 断言顺序严格对齐 native/effects_host/builtin_effect_tests.h：
+// 先 setParameterValue，再 prepareToPlay，再 processBlock。
+const results = [];
+function check (name, ok, detail) {
+  results.push({ name, ok: !!ok, detail: detail === undefined ? '' : String(detail) });
+}
+function approx (a, b, tol) { return Math.abs(a - b) <= tol; }
+
+function makeEffect (kind, rate, params) {
+  const fx = new globalThis.GuitarbookEffects.BuiltinEffect(kind, rate);
+  if (params) {
+    for (let i = 0; i < params.length; i++) fx.setParameterValue(i, params[i]);
+  }
+  fx.prepareToPlay(rate, 4096);
+  return fx;
+}
+
+// ---------------------------------------------------------------------------
+// A. DSP 数值断言（页面内直接用 globalThis.GuitarbookEffects）
+// ---------------------------------------------------------------------------
+function runDspAssertions () {
+  const G = globalThis.GuitarbookEffects;
+  check('导出 globalThis.GuitarbookEffects', !!G);
+  if (!G) return;
+  check('注册名常量', G.PROCESSOR_NAME === 'guitarbook-effects', G.PROCESSOR_NAME);
+
+  const kinds = G.BUILTIN_KINDS;
+  check('10 种内置效果器', kinds.length === 10, kinds.join(','));
+
+  // 静音输入 → 静音输出
+  {
+    const fx = makeEffect('amp_crunch', 48000);
+    const l = new Float64Array(512), r = new Float64Array(512);
+    fx.processBlock(l, r, 512);
+    let peak = 0;
+    for (let i = 0; i < 512; i++) peak = Math.max(peak, Math.abs(l[i]), Math.abs(r[i]));
+    check('静音输入 → 静音输出', peak === 0, 'peak=' + peak);
+  }
+
+  // 三种采样率 × 10 kind，参数取 0/1，输出必须有限
+  {
+    let bad = '';
+    let count = 0;
+    for (const rate of [44100, 48000, 96000]) {
+      for (const kind of kinds) {
+        for (const v of [0, 1]) {
+          const fx = new G.BuiltinEffect(kind, rate);
+          fx.prepareToPlay(rate, 512);
+          const n = fx.describeParameters().length;
+          for (let p = 0; p < n; p++) fx.setParameterValue(p, v);
+          const l = new Float64Array(1024), r = new Float64Array(1024);
+          for (let i = 0; i < 1024; i++) { l[i] = 0.5 * Math.sin(i * 0.01); r[i] = l[i]; }
+          fx.processBlock(l, r, 1024);
+          for (let i = 0; i < 1024; i++) {
+            if (!Number.isFinite(l[i]) || !Number.isFinite(r[i])) { bad = kind + '@' + rate + '/' + v + ' l' + i + '=' + l[i]; break; }
+          }
+          count++;
+        }
+      }
+    }
+    check('3 采样率 × 10 kind 输出有限 (' + count + ' 组)', bad === '', bad);
+  }
+
+  // amp 参考渲染（对齐原生 renderAmp：输入 0.12*(sin110+sin997+sin6000)）
+  const renderAmp = (kind, parameter, value) => {
+    const fx = new G.BuiltinEffect(kind, 48000);
+    if (parameter >= 0) fx.setParameterValue(parameter, value);
+    fx.prepareToPlay(48000, 4096);
+    const n = 4096;
+    const l = new Float64Array(n), r = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const t = i / 48000;
+      const s = 0.12 * (Math.sin(t * 2 * Math.PI * 110) + Math.sin(t * 2 * Math.PI * 997) + Math.sin(t * 2 * Math.PI * 6000));
+      l[i] = s; r[i] = s;
+    }
+    fx.processBlock(l, r, n);
+    return l;
+  };
+  const difference = (a, b) => {
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
+    return d;
+  };
+
+  {
+    const base = renderAmp('amp_clean', -1, 0);
+    let peak = 0;
+    for (let i = 0; i < base.length; i++) peak = Math.max(peak, Math.abs(base[i]));
+    check('amp 参考渲染幅度 > 0.01', peak > 0.01, 'peak=' + peak.toFixed(6));
+
+    const models = ['amp_clean', 'amp_chime', 'amp_crunch', 'amp_modern'];
+    const rendered = models.map(m => renderAmp(m, -1, 0));
+    let minDiff = Infinity;
+    for (let i = 0; i < models.length; i++) {
+      for (let j = i + 1; j < models.length; j++) minDiff = Math.min(minDiff, difference(rendered[i], rendered[j]));
+    }
+    check('四款箱头两两不同 (Σ|Δ| > 1)', minDiff > 1, 'minDiff=' + minDiff.toFixed(4));
+
+    // 参数取值必须落在量程内（原生 setParameterValue 会夹到量程，JS 同语义）
+    const ampAlt = [8, 6, 6, 6, 0.2, 0.2];
+    let unchanged = '';
+    for (let p = 0; p < 6; p++) {
+      const alt = renderAmp('amp_clean', p, ampAlt[p]);
+      if (difference(base, alt) < 1e-9) unchanged += 'p' + p + ' ';
+    }
+    check('amp 6 个参数各自有效', unchanged === '', unchanged);
+
+    const silent = renderAmp('amp_clean', 4, 0);
+    let peakM = 0;
+    for (let i = 0; i < silent.length; i++) peakM = Math.max(peakM, Math.abs(silent[i]));
+    check('amp master=0 静音', peakM === 0, 'peak=' + peakM);
+
+    const twin = renderAmp('amp_clean', -1, 0);
+    let same = true;
+    for (let k = 0; k < base.length; k++) if (base[k] !== twin[k]) { same = false; break; }
+    check('amp 两个实例不共享状态', same);
+  }
+
+  // wah（对齐原生 renderAutoWah / dryWah）
+  {
+    const renderWah = (params) => {
+      const fx = new G.BuiltinEffect('wah', 48000);
+      if (params) for (let i = 0; i < params.length; i++) fx.setParameterValue(i, params[i]);
+      fx.prepareToPlay(48000, 4096);
+      const n = 4096;
+      const l = new Float64Array(n), r = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        const t = i / 48000;
+        const s = 0.12 * (Math.sin(t * 2 * Math.PI * 110) + Math.sin(t * 2 * Math.PI * 997) + Math.sin(t * 2 * Math.PI * 6000));
+        l[i] = s; r[i] = s;
+      }
+      fx.processBlock(l, r, n);
+      return l;
+    };
+    const reference = renderWah(null);
+    let peak = 0;
+    for (let i = 0; i < reference.length; i++) peak = Math.max(peak, Math.abs(reference[i]));
+    check('wah 幅度 > 0.001', peak > 0.001, 'peak=' + peak.toFixed(6));
+
+    let unchanged = '';
+    for (let p = 0; p < 4; p++) {
+      const alt = renderWah([p === 0 ? 0.9 : p === 1 ? 7 : p === 2 ? 0 : 1]);
+      if (difference(reference, alt) < 1e-9) unchanged += 'p' + p + ' ';
+    }
+    check('wah 参数 0..3 各自有效', unchanged === '', unchanged);
+
+    const level0 = renderWah([null, null, null, 0]);
+    let peakL = 0;
+    for (let i = 0; i < level0.length; i++) peakL = Math.max(peakL, Math.abs(level0[i]));
+    check('wah level=0 静音', peakL === 0, 'peak=' + peakL);
+
+    const autoWah = renderWah([null, null, null, null, 1, 1, 0.8]);
+    check('wah 自动扫频与手动不同 (Σ|Δ| > 1)', difference(reference, autoWah) > 1, 'Σ|Δ|=' + difference(reference, autoWah).toFixed(4));
+    const autoFast = renderWah([null, null, null, null, 1, 5, 0.8]);
+    check('wah speed 有效', difference(autoWah, autoFast) > 1, 'Σ|Δ|=' + difference(autoWah, autoFast).toFixed(4));
+    const autoShallow = renderWah([null, null, null, null, 1, 1, 0.2]);
+    check('wah depth 有效', difference(autoWah, autoShallow) > 1, 'Σ|Δ|=' + difference(autoWah, autoShallow).toFixed(4));
+    const zeroDepth = renderWah([null, null, null, null, 1, 1, 0]);
+    check('wah depth=0 ≈ 手动 (Σ|Δ| < 0.001)', difference(reference, zeroDepth) < 0.001, 'Σ|Δ|=' + difference(reference, zeroDepth).toExponential(3));
+
+    // 干声：脉冲只灌左声道（与原生一致），右声道保持静音
+    const dryFx = new G.BuiltinEffect('wah', 48000);
+    dryFx.setParameterValue(2, 0);
+    dryFx.setParameterValue(3, 1);
+    dryFx.prepareToPlay(48000, 512);
+    const dl = new Float64Array(512), dr = new Float64Array(512);
+    dl[0] = 0.5;
+    dryFx.processBlock(dl, dr, 512);
+    let rightPeak = 0;
+    for (let i = 0; i < dr.length; i++) rightPeak = Math.max(rightPeak, Math.abs(dr[i]));
+    check('wah 干声 sample0=0.5 且右声道静音', approx(dl[0], 0.5, 1e-9) && rightPeak === 0, 'l0=' + dl[0] + ' rightPeak=' + rightPeak);
+  }
+
+  // delay（脉冲只灌左声道，原生只检查左声道）
+  {
+    const fx = new G.BuiltinEffect('delay', 48000);
+    fx.setParameterValue(0, 20);
+    fx.setParameterValue(1, 0.5);
+    fx.setParameterValue(2, 1);
+    fx.prepareToPlay(48000, 4096);
+    const l = new Float64Array(4096), r = new Float64Array(4096);
+    l[0] = 0.5; r[0] = 0.5;
+    fx.processBlock(l, r, 4096);
+    check('delay sample0 = 0（湿声不漏干声）', approx(l[0], 0, 1e-9), 'l0=' + l[0]);
+    check('delay sample960 = 0.5', approx(l[960], 0.5, 0.001), 'l960=' + l[960]);
+    check('delay sample1920 = 0.25', approx(l[1920], 0.25, 0.001), 'l1920=' + l[1920]);
+  }
+
+  // compressor
+  {
+    const fx = new G.BuiltinEffect('compressor', 48000);
+    fx.setParameterValue(0, -20);
+    fx.setParameterValue(1, 4);
+    fx.setParameterValue(2, 1);
+    fx.setParameterValue(4, 0);
+    fx.prepareToPlay(48000, 16384);
+    const n = 16384;
+    const l = new Float64Array(n), r = new Float64Array(n);
+    for (let i = 0; i < n; i++) { l[i] = 0.5; r[i] = 0.5; }
+    fx.processBlock(l, r, n);
+    check('compressor 末样本 ≈ 0.149535', approx(l[n - 1], 0.149535, 0.001), 'last=' + l[n - 1]);
+  }
+
+  // reverb
+  {
+    const renderReverb = (mix) => {
+      const fx = new G.BuiltinEffect('reverb', 48000);
+      fx.setParameterValue(2, mix);
+      fx.prepareToPlay(48000, 4096);
+      const l = new Float64Array(4096), r = new Float64Array(4096);
+      l[0] = 0.5;
+      fx.processBlock(l, r, 4096);
+      return l;
+    };
+    const dry = renderReverb(0);
+    check('reverb mix=0 → sample0 = 0.5（干声 unity）', approx(dry[0], 0.5, 0.0001), 'l0=' + dry[0]);
+    const wet = renderReverb(1);
+    check('reverb mix=1 → |sample0| < 0.0001', Math.abs(wet[0]) < 0.0001, 'l0=' + wet[0]);
+    let tail = 0;
+    for (let i = 1000; i < 4096; i++) tail = Math.max(tail, Math.abs(wet[i]));
+    check('reverb mix=1 → [1000,4096) 有尾巴 > 0.0001', tail > 0.0001, 'tail=' + tail.toExponential(3));
+  }
+
+  // 新 delay 实例不继承尾巴
+  {
+    const fx = new G.BuiltinEffect('delay', 48000);
+    fx.prepareToPlay(48000, 4096);
+    const l = new Float64Array(4096), r = new Float64Array(4096);
+    fx.processBlock(l, r, 4096);
+    let peak = 0;
+    for (let i = 0; i < 4096; i++) peak = Math.max(peak, Math.abs(l[i]), Math.abs(r[i]));
+    check('新 delay 实例不继承尾巴', peak === 0, 'peak=' + peak);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// B. AudioWorklet 集成验证（真实 AudioWorkletNode + OfflineAudioContext）
+// ---------------------------------------------------------------------------
+async function renderWithWorklet (messages, frames) {
+  const ctx = new OfflineAudioContext(2, frames, 48000);
+  await ctx.audioWorklet.addModule('../web/effects_worklet.js');
+  const node = new AudioWorkletNode(ctx, 'guitarbook-effects', {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [2],
+    channelCount: 2,
+    channelCountMode: 'explicit'
+  });
+  const buffer = ctx.createBuffer(2, frames, 48000);
+  buffer.getChannelData(0)[0] = 0.5;
+  buffer.getChannelData(1)[0] = 0.5;
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(node);
+  node.connect(ctx.destination);
+  for (const m of messages) node.port.postMessage(m);
+  // 等 worklet 线程收到端口消息再开始渲染，否则消息可能赶不上离线渲染
+  await new Promise(r => setTimeout(r, 60));
+  source.start(0);
+  const rendered = await ctx.startRendering();
+  return rendered.getChannelData(0);
+}
+
+async function runWorkletAssertions () {
+  if (typeof OfflineAudioContext === 'undefined') {
+    check('OfflineAudioContext 可用', false, 'undefined');
+    return;
+  }
+  const ctx0 = new OfflineAudioContext(2, 1024, 48000);
+  try {
+    await ctx0.audioWorklet.addModule('../web/effects_worklet.js');
+    check('addModule 成功', true);
+  } catch (e) {
+    check('addModule 成功', false, e && e.message);
+    return;
+  }
+  try {
+    const node = new AudioWorkletNode(ctx0, 'guitarbook-effects', {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit'
+    });
+    check('AudioWorkletNode 创建成功', !!node);
+  } catch (e) {
+    check('AudioWorkletNode 创建成功', false, e && e.message);
+    return;
+  }
+
+  // 默认参数 delay：time 350ms=16800 采样，feedback 0.35，mix 0.25
+  {
+    const out = await renderWithWorklet([{ type: 'add', index: 0, kind: 'delay' }], 40000);
+    check('worklet: 干湿混合 sample0 = 0.375', approx(out[0], 0.375, 0.001), 'out0=' + out[0]);
+    check('worklet: 首次回声 sample16800 = 0.125', approx(out[16800], 0.125, 0.001), 'out16800=' + out[16800]);
+    check('worklet: 二次回声 sample33600 = 0.04375', approx(out[33600], 0.04375, 0.001), 'out33600=' + out[33600]);
+  }
+
+  // 参数消息：mix → 1（湿声满）
+  {
+    const out = await renderWithWorklet([
+      { type: 'add', index: 0, kind: 'delay' },
+      { type: 'parameter', index: 0, parameter: 2, value: 1 }
+    ], 40000);
+    // mix 走 20 ms 参数平滑（960 采样），干声在爬升结束前仍在
+    check('worklet: 参数消息生效 → sample0 ≈ 0.375（mix 仍在平滑爬升）', approx(out[0], 0.375, 0.01), 'out0=' + out[0]);
+    check('worklet: 参数消息生效 → 960 采样后干声被完全移除', approx(out[960], 0, 0.001), 'out960=' + out[960]);
+    check('worklet: 参数消息生效 → sample16800 ≈ 0.5', approx(out[16800], 0.5, 0.001), 'out16800=' + out[16800]);
+  }
+
+  // 旁通 + 移除
+  {
+    const out = await renderWithWorklet([
+      { type: 'add', index: 0, kind: 'delay' },
+      { type: 'bypass', index: 0, value: true }
+    ], 40000);
+    check('worklet: 旁通后为直通 (sample0 = 0.5)', approx(out[0], 0.5, 0.001), 'out0=' + out[0]);
+  }
+  {
+    const out = await renderWithWorklet([
+      { type: 'add', index: 0, kind: 'delay' },
+      { type: 'remove', index: 0 }
+    ], 40000);
+    check('worklet: 移除后为直通 (sample0 = 0.5)', approx(out[0], 0.5, 0.001), 'out0=' + out[0]);
+  }
+
+  // 主输出增益
+  {
+    const out = await renderWithWorklet([
+      { type: 'add', index: 0, kind: 'delay' },
+      { type: 'gain', value: 0.5 }
+    ], 40000);
+    check('worklet: gain=0.5 → sample0 = 0.1875', approx(out[0], 0.1875, 0.001), 'out0=' + out[0]);
+  }
+
+  // 非法 kind → error 消息
+  {
+    const ctx = new OfflineAudioContext(2, 1024, 48000);
+    await ctx.audioWorklet.addModule('../web/effects_worklet.js');
+    const node = new AudioWorkletNode(ctx, 'guitarbook-effects', {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit'
+    });
+    const messages = [];
+    node.port.onmessage = (e) => messages.push(e.data);
+    node.port.postMessage({ type: 'add', index: 0, kind: 'not_a_kind' });
+    await ctx.startRendering();
+    await new Promise(r => setTimeout(r, 50));
+    const err = messages.find(m => m.type === 'error');
+    check('worklet: 非法 kind 上报 error', !!err && typeof err.message === 'string', JSON.stringify(messages.slice(0, 2)));
+  }
+}
+
+(async () => {
+  try {
+    runDspAssertions();
+  } catch (e) {
+    check('DSP 断言块未抛异常', false, e && (e.stack || e.message));
+  }
+  try {
+    await runWorkletAssertions();
+  } catch (e) {
+    check('worklet 断言块未抛异常', false, e && (e.stack || e.message));
+  }
+  const failed = results.filter(r => !r.ok);
+  const text = results.map(r => (r.ok ? 'PASS  ' : 'FAIL  ') + r.name + (r.detail ? '   [' + r.detail + ']' : '')).join('\n')
+    + '\n\n' + (results.length - failed.length) + '/' + results.length + ' passed';
+  document.getElementById('results').textContent = text;
+  document.title = failed.length === 0 ? 'PASS' : 'FAIL';
+})();
+</script>
+</body>
+</html>
