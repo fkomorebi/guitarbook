@@ -1,6 +1,6 @@
 # 最新功能设计
 
-最后更新：2026-11-01
+最后更新：2026-11-03
 
 ## 文档职责
 
@@ -21,7 +21,7 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 | --- | --- | --- | --- |
 | 应用基础框架 | 本次初始化范围 | 已实现独立入口、统一主题、工具首页及调音器入口；静态分析通过；完整 Flutter 测试 25 项通过 | 六个平台共用界面代码；Linux Debug 与 Web 构建通过，其他平台构建及各平台运行待验证 |
 | 实时吉他效果器宿主 | Android / iOS / Linux / Windows 内置六类单块、四种箱头；桌面另支持 VST3；电脑端浏览器新增内置效果器（本次变更） | 已实现独立页自动监听、工作台设备检测、监听中效果链编辑与可拖动排序的拟物单块效果器板；离线测试通过；电脑端浏览器版 DSP 与 Web 后端均已实现，并通过离线回归、浏览器 DSP 端到端与整页自动化实测 | Linux Debug 及声卡静音缓冲验证通过；Windows 未构建，两平台真实演奏听感待验证；Android / iOS 新增原生接入，构建与真机验证见文末；macOS 不支持；电脑端浏览器版真机听感与实测延迟待验证（见「电脑端 Web 效果器」一节） |
-| 手柄线性扳机表情踏板 | 哇音手动模式的位置可由游戏手柄线性扳机连续控制 | 已实现 Linux evdev 与 Windows XInput 输入层、量程校准、反向、目标哇音选择及 25 ms 节流写入；单元与组件测试通过 | 仅 Linux / Windows 桌面；Linux 以合成事件与普通文件验证解析，真实 /dev/input、权限与物理手柄未验证；Windows 未构建、未运行；其他平台显示不支持说明 |
+| 手柄线性扳机表情踏板 | 哇音手动模式的位置可由游戏手柄线性扳机连续控制 | 已实现 Linux evdev、Windows XInput 与电脑端浏览器 Gamepad API 三套输入层、量程校准、反向、目标哇音选择及 25 ms 节流写入；本轮补齐 Linux 失败原因提示（未启用／未连接／无权限／没有线性扳机轴）、网页端读取实现与宿主诊断脚本，并实测定位到本机每秒断连的根因是 Flutter debug 下 Dart VM 采样分析器（SIGPROF）打断 `poll(2)` 返回 `EINTR`、被误判为设备断开；2026-11-03 已修复（EINTR 重试、`O_NONBLOCK` 参数修正、EOF/空读区分、重新启用时重置去重缓存、isolate onError/onExit 兜底） | Linux / Windows 桌面与电脑端浏览器；Linux 以合成事件与普通文件验证解析，CLI 探针在 profiler 开启下输出单条 ready（Flydigi Apex 5，量程 0–255）；GUI 端到端已在 profiler 开启的 Debug 构建中验证（打开开关即「已连接：Flydigi Apex 5」，35 秒采样无回落、无 fd 泄漏，关→开 3 次均恢复；真实扳机轴读数待实测）；网页端只有单元测试与注入假手柄的整页实测，未在真实手柄上实测；Windows 未构建、未运行；Android / iOS / macOS 显示不支持说明 |
 | 即兴循环录音 | 可配置内存、覆盖最早音频、三路混音 | 已实现独立启停、试听及 WAV 保存，2026-10-31 修复混音时间轴抖动，自动验证见下节 | 六平台代码接入；Linux/Android/Web 构建通过，各平台设备待验证 |
 | Looper 叠录 | 自由长度叠录第一版 | 已实现录音分层、撤销、踏板映射、输入选择、0–400% 回放音量及 Android / iOS / Linux / Windows 效果链后湿声采集；本轮验证见文末 | Linux Debug、Web Release 构建通过，六平台设备全双工与输入兼容性待验证 |
 | 鼓机 | 即兴伴奏第一版 | 已实现 12 种风格预设、16 步编辑、分轨静音、独立音量、速度与摇摆；静态分析及测试通过 | 六平台音频接入；真实鼓音待验证 |
@@ -30,7 +30,7 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 | 音阶指板 | 本次新增 | 已实现音阶入门及各音阶说明、12 主音、常用音阶、CAGED / 一弦三音与横向 22 品展示 | 六平台共用纯 Flutter 代码；设备显示待验证 |
 | 吉他调音器 | 本次标准调弦范围已实现 | 自动/手动选弦、音高检测、平滑指针、稳定调准反馈及 3 秒丢音保持已实现，静态分析与独立算法/反馈检查通过 | 六平台采集接入；Linux Debug 构建通过，各平台设备采集待验证 |
 
-已实现 Looper、鼓机、调音器、节拍器、音阶指板和和弦练习；实时效果器已接入 Android / iOS / Linux / Windows，包含 Linux 离线验证，真实音频待验证；电脑端浏览器版实时效果器（内置效果器）：DSP 内核与 Web 后端均已实现，静态分析、Node 离线回归、Chrome 浏览器 DSP 端到端与 Flutter Web 整页自动化实测通过，真机听感与实测延迟待验证。哇音的手柄线性扳机表情踏板（Linux / Windows）已实现，真实手柄与权限行为待验证。后续工具及优先级待确定。
+已实现 Looper、鼓机、调音器、节拍器、音阶指板和和弦练习；实时效果器已接入 Android / iOS / Linux / Windows，包含 Linux 离线验证，真实音频待验证；电脑端浏览器版实时效果器（内置效果器）：DSP 内核与 Web 后端均已实现，静态分析、Node 离线回归、Chrome 浏览器 DSP 端到端与 Flutter Web 整页自动化实测通过，真机听感与实测延迟待验证。哇音的手柄线性扳机表情踏板（Linux / Windows 桌面与电脑端浏览器）已实现；2026-11-03 修复了 Flutter debug 下 Dart VM 采样分析器 SIGPROF 打断 `poll(2)`、`EINTR` 被误判为断开而每秒重连的问题（CLI 探针稳定就绪；GUI 端到端已在 profiler 开启的 Debug 构建中验证，真实扳机读数待实测），并补齐失败原因提示与宿主诊断脚本。后续工具及优先级待确定。
 
 ## 即兴工作台循环录音（2026-10-29）
 
@@ -380,19 +380,33 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 
 ### 哇音效果器（2026-10-29）
 
-- 设计：新增可切换手动 / 自动的哇音 Wah 单块，位置 0–1（默认 0.5）按对数映射到 350–2200 Hz，共振 Q 0.5–8（默认 2）、干湿比 0–1（默认 1）、输出 0–1（默认 0.7）。手动模式拖动位置旋钮扫频；自动模式使用正弦 LFO，以位置为中心、深度一半为偏移幅度并限制在 0–1。速度 0.1–5 Hz（默认 1），深度 0–1（默认 0.8），默认手动；自动模式显示速度与深度旋钮，切回手动保留参数。模式切换平滑过渡，使用拓扑保持状态变量带通滤波器。2026-11-01 起，手动模式位置还可由游戏手柄线性扳机连续控制（仅 Linux / Windows，见下节）；自动模式不使用外部扳机。
-- 平台：Android / iOS / Linux / Windows 共用 DSP，沿用八节上限、独立实例、排序、旁通与 Looper 湿声采集；macOS 不支持；电脑端浏览器版提供内置哇音（DSP 已实现并验证，Flutter Web 后端代码已落盘、尚未提交；不含 Looper 湿声采集）。手柄扳机表情踏板只在 Linux / Windows 桌面版提供。
+- 设计：新增可切换手动 / 自动的哇音 Wah 单块，位置 0–1（默认 0.5）按对数映射到 350–2200 Hz，共振 Q 0.5–8（默认 2）、干湿比 0–1（默认 1）、输出 0–1（默认 0.7）。手动模式拖动位置旋钮扫频；自动模式使用正弦 LFO，以位置为中心、深度一半为偏移幅度并限制在 0–1。速度 0.1–5 Hz（默认 1），深度 0–1（默认 0.8），默认手动；自动模式显示速度与深度旋钮，切回手动保留参数。模式切换平滑过渡，使用拓扑保持状态变量带通滤波器。2026-11-01 起，手动模式位置还可由游戏手柄线性扳机连续控制（Linux / Windows 桌面与电脑端浏览器，见下节）；自动模式不使用外部扳机。
+- 平台：Android / iOS / Linux / Windows 共用 DSP，沿用八节上限、独立实例、排序、旁通与 Looper 湿声采集；macOS 不支持；电脑端浏览器版提供内置哇音（DSP 已实现并验证，Flutter Web 后端代码已落盘、尚未提交；不含 Looper 湿声采集）。手柄扳机表情踏板在 Linux / Windows 桌面版与电脑端浏览器提供。
 - 实现状态：已实现。验收覆盖扫频与共振实际改变音频、干湿/输出边界、三种采样率与参数极值稳定性、实例隔离，以及界面重复添加与独立调参/旁通、手动/自动切换和窄屏大字号操作。
 
 - 本轮验证（2026-10-29）：静态分析、完整 107 项 Flutter 测试、Linux Debug 构建、桌面宿主 `--test-builtins` 和移动端 C++ 离线 CTest 通过。覆盖手动/自动切换、重复添加与独立调参/旁通、320×568 双倍字号下自动模式深度调节；原生覆盖 44.1/48/96 kHz 参数极值、扫频/共振/速度/深度改变音频、零深度等同手动、干湿/输出边界及实例隔离，既有湿声与效果链回归通过。本轮未重新构建 Android / iOS / Windows；真实吉他听感、外接声卡与长期稳定性待设备验证。
 
-### 手柄线性扳机表情踏板（2026-11-01）
+### 手柄线性扳机表情踏板（2026-11-01，2026-11-02 增补网页端与状态提示，2026-11-03 修复 Linux 断连循环）
 
 - 设计：在效果器页新增“手柄线性扳机 → 哇音踏板”卡片。用户选择左/右线性扳机与目标哇音实例，可反向并校准量程；扳机读数连续映射到哇音位置参数 0–1，以 25 毫秒节流写入效果链，像表情踏板一样扫频。仅在目标哇音处于手动模式、效果器正在监听且已读到扳机读数时写入；自动扫频模式不抢占位置，界面提示原因。默认不启用，退出页面释放输入。未选择目标或链中没有哇音时只提示，不写入参数。
-- 输入层：Linux 读取 `/proc/bus/input/devices` 发现带线性扳机轴的设备，在独立 isolate 中用非阻塞 `open` + `poll` 读取 `/dev/input/event*`，通过 `EVIOCGABS` 读取实际量程（常见 0–255 或 0–1023），支持热插拔重连；读不到设备或权限不足时在卡片内显示可操作原因（含加入 input 组或 udev 规则的建议）。Windows 通过 `dart:ffi` 轮询 XInput（`xinput1_4` → `xinput1_3` → `xinput9_1_0`），读取 `bLeftTrigger` / `bRightTrigger`（0–255）。其他平台显示“不支持”说明，Web / 移动端 / macOS 未接入。
-- 平台限制：Windows 仅识别 XInput 兼容手柄（Xbox 系列）；PlayStation 手柄需先经 Steam Input 或 DS4Windows 映射。Linux 依赖桌面发行版对 `/dev/input` 的授权，Flatpak / Snap 沙箱可能屏蔽输入设备。蓝牙连接、第三方手柄轴映射与真实扳机手感均未验证。
-- 验收：启用手柄踏板后识别设备并显示原始读数；选择目标哇音后扳机连续改变位置且无跳变；反向与量程校准生效；自动模式、未监听、无哇音或未选目标时不写入并提示；断开手柄后可重新发现；窄屏双倍字号可操作；未知平台显示限制说明。
-- 验证（2026-11-01）：静态分析通过，完整 151 项 Flutter 测试通过（新增 42 项），Linux Debug 构建通过，覆盖 evdev 事件与 `/proc` 解析、ioctl 量程解码、普通文件读取、Linux 输入层错误与重连路径、控制器归一化 / 校准 / 反向 / 触发重启，以及效果器页扳机写入节流、自动模式跳过、无目标提示、不支持平台与 320 像素双倍字号布局。本机没有 `/dev/input` 与物理手柄，Linux 输入层以合成事件和普通文件路径验证，未做真实手柄、真实桌面权限与音频效果验证；Windows 输入层未构建、未运行；其他平台未接入。
+- 输入层（三套实现，量程统一为 0–255 原始值）：
+  - Linux 读取 `/proc/bus/input/devices` 发现带线性扳机轴的设备，在独立 isolate 中用非阻塞 `open` + `poll` 读取 `/dev/input/event*`，通过 `EVIOCGABS` 读取实际量程（常见 0–255 或 0–1023），支持热插拔重连；读取循环中，`poll` 返回 `EINTR` 时按剩余时间重试（Flutter debug 下 Dart VM 采样分析器的 SIGPROF 会打断阻塞 poll），`read` 只有读到 EOF 才视为断开，`EAGAIN` 或空读继续轮询；读不到设备或权限不足时在卡片内显示可操作原因（含加入 input 组或 udev 规则的建议）。
+  - Linux 备用通道：`event*` 打不开且错误码为 EACCES/EPERM 时，自动改读同一手柄的旧版 joystick 节点 `/dev/input/js*`（默认 `0664`，任何用户可读，不需要 `input` 组）。该接口的事件是 8 字节 `struct js_event`（`__u32 time`、`__s16 value`、`__u8 type`、`__u8 number`，`type` 的 `0x80` 为打开设备时的初始化事件位），值被内核 `joydev_correct()` 的默认曲线缩放到 -32767..32767（0 为中点），扳机轴号按 `JSIOCGAXMAP`（`0x80406a32`）查询，失败时按「ABS 编码在设备上报轴里升序排名」推算；读到的值换算回 0–255 再驱动哇。evdev 能打开时始终优先 evdev，因为只有它能给出驱动真实量程。
+  - Windows 通过 `dart:ffi` 轮询 XInput（`xinput1_4` → `xinput1_3` → `xinput9_1_0`），读取 `bLeftTrigger` / `bRightTrigger`（0–255）。
+  - 电脑端浏览器（2026-11-02 新增）通过 `package:web` 轮询 `navigator.getGamepads()`（间隔 24 ms，约 42 Hz），读取标准游戏手柄映射中 button index 6（L2）与 7（R2）的模拟量，浏览器归一化到 0–1 后换算为 0–255，与 Windows XInput 版同量程。读取逻辑拆到不依赖 `dart:js_interop` 的纯 Dart 模块，保证 VM 端可单测。2026-11-03 补充：同时监听 `window` 的 `gamepadconnected` / `gamepaddisconnected` 事件，事件到达即刻刷新状态，用户不必等下一个轮询周期；浏览器断开后仍可能在 `getGamepads()` 里留下一条记录，此时把该设备加入忽略名单，直到重新收到连接事件才解除，避免刚报完「已断开」又被残留记录顶回「已连接」。
+- 状态提示（2026-11-02 改进）：此前 Linux 侧读不到 `/proc` 时发出的错误会被随后的“正在查找手柄…”覆盖，界面永远只显示同一句话，用户无法判断原因；现在把状态拆开：
+  - 未启用开关时显示“未启用”，不再冒充“正在查找手柄”（读取源此前根本未启动）；
+  - 读不到 `/proc/bus/input/devices` → 错误状态并说明容器、虚拟机或受限沙箱里可能读不到输入设备列表；
+  - 扫描到设备但没有带线性扳机轴的手柄 → 若内核把设备注册成 joystick（`js*` 节点）则点名该手柄并说明它没有线性扳机轴（例如 Switch Pro 的 ZL/ZR 是数字按键）；
+  - 完全没有手柄 → 保持查找状态，但附带系统当前扫描到的输入设备数量，并提示无线手柄休眠、蓝牙断开或虚拟机 USB 直通掉线都会移除设备节点，需要先唤醒手柄并确认它在系统“手柄”设置里在线；
+  - 网页端手柄断开 → 保持“手柄已断开，正在重新查找…”的提示，不再退回笼统的“正在查找手柄…”，直到重新连上才恢复“已连接”；
+  - 网页端从未连上手柄 → 查找状态里直接给出可照做的三步排查提示（浏览器通常要按一次手柄按键才把设备交给网页；网页必须在前台，否则浏览器会暂停手柄读取；Linux 上浏览器还要能读 `/dev/input/event*`，即 `input` 组或 udev uaccess 规则，Chrome 官方规则缺失时浏览器同样看不到手柄）；网页端手柄在线但没有线性扳机 → 点名说明「浏览器的标准手柄映射要求左右扳机按钮提供模拟量」，不再出现 button index 这类内部标识；
+  - 读取循环整体包 try/catch，意外异常不再让扫描循环静默退出。
+- 平台限制：Windows 仅识别 XInput 兼容手柄（Xbox 系列）；PlayStation 手柄需先经 Steam Input 或 DS4Windows 映射。Linux 依赖桌面发行版对 `/dev/input` 的授权，Flatpak / Snap 沙箱可能屏蔽输入设备；权限不足时可用 `sudo usermod -aG input $USER`（需重新登录）或 udev 规则 `KERNEL=="event*", SUBSYSTEM=="input", MODE="0660", TAG+="uaccess"`（写入 `/etc/udev/rules.d/99-gamepad.rules` 后执行 `sudo udevadm control --reload-rules && sudo udevadm trigger`）。
+  - 2026-11-03 实测补充的权限模型：Ubuntu 默认规则 `50-udev-default.rules` 给 `event*` 节点 `0660 root:input`，而 `KERNEL=="js[0-9]*", MODE="0664"` 让旧版 joystick 节点对所有用户可读；`70-uaccess.rules` 的规则是 `SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="?*", TAG+="uaccess"`。`ID_INPUT_JOYSTICK` 按设备属性设置，xpad 手柄的 `event*` 节点也会带上它（udev 数据库 `/run/udev/data/c13:N` 里可见 `E:ID_INPUT_JOYSTICK=1`、`G:uaccess`）；本机（Ubuntu 26.04 虚拟机）实测当前用户经 ACL 即可读 `/dev/input/event20`、`open` 成功且设备在线，**权限不是本次故障原因**，此前“阻塞在系统读取权限”的结论已作废。若 `getfacl` 里没有当前用户，可用 `sudo usermod -aG input $USER`（需重新登录）或一条 uaccess 规则授权：`echo 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0660", GROUP="input", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/99-gamepad.rules && sudo udevadm control --reload-rules && sudo udevadm trigger`。网页端同样受此限制——浏览器进程要自己读 `/dev/input/event*`，Chrome 未安装官方 `60-chrome-devices.rules` 时枚举不到手柄；Firefox 的 snap 版默认已连接 joystick 接口。读不到 `event*` 时桌面版还有 `/dev/input/js*` 这条免权限通道。
+  - 诊断脚本 `tool/probe_gamepad.dart`（`build/flutter-sdk/bin/dart run tool/probe_gamepad.dart [秒数]`，需在宿主桌面会话运行）：输出当前用户与组、系统输入设备及哪些带线性扳机轴、`/dev/input/event*` 与 `/dev/input/js*` 的权限、ACL 与能否打开（errno 13 = 权限不足）、驱动上报的扳机轴量程，并在抓取窗口内实时打印 ABS 事件与旧版 joystick 通道的轴读数（运行期间按一下右扳机即可看到数值变化），最后跑一次真实输入源打印快照。网页端要求页面在前台且用户与页面有过交互，浏览器会节流后台标签页的定时器；没有标准映射的手柄其扳机会退化成数字按键，此时卡片明确报错。蓝牙连接、第三方手柄轴映射与真实扳机手感均未验证。Android / iOS / macOS 未接入，显示不支持说明。
+- 验收：启用手柄踏板后识别设备并显示原始读数；选择目标哇音后扳机连续改变位置且无跳变；反向与量程校准生效；自动模式、未监听、无哇音或未选目标时不写入并提示；断开手柄后可重新发现；窄屏双倍字号可操作；未知平台显示限制说明；三种输入层均给出“已连接 / 正在查找 / 具体失败原因”而不是笼统的等待提示；Flutter debug（profiler 开启）下连接状态保持稳定，不出现每秒 ready→disconnected 循环，`EINTR` / 空读不当作断开。
+- 验证（2026-11-01 / 2026-11-02 回填）：静态分析通过；2026-11-01 完整 151 项 Flutter 测试通过（新增 42 项），Linux Debug 构建通过，覆盖 evdev 事件与 `/proc` 解析、ioctl 量程解码、普通文件读取、Linux 输入层错误与重连路径、控制器归一化 / 校准 / 反向 / 触发重启，以及效果器页扳机写入节流、自动模式跳过、无目标提示、不支持平台与 320 像素双倍字号布局。2026-11-03 更新（网页端诊断与提示、触控板误判修正）：网页端改为监听 `gamepadconnected` / `gamepaddisconnected` 事件并立即刷新；浏览器断开后残留的设备记录进入忽略名单，不会把状态顶回“已连接”；从未连上时给出三步排查提示（按键交接、页面前台、Linux 下的 `/dev/input/event*` 权限），无线性扳机时点名说明；Linux 侧新增 `looksLikeGamepad()`，只有摇杆类轴的触控板（QEMU tablet、spice vdagent 等）不再被当成“检测到手柄却没有线性扳机轴”。测试（2026-11-03）：静态分析通过，完整 **206 项** Flutter 测试通过（2026-11-01 基线 151 项，累计新增 55 项）；网页端整页自动实测（真实 `build/web` 产物 + 桌面 Chrome headless + 注入的标准映射假手柄，`tool/check_web_gamepad_page.mjs`）复测 **11 / 11** 通过。2026-11-03 复查与修复（Linux 断连循环）：本机（Ubuntu 26.04 虚拟机）确认系统枚举到 Flydigi Apex 5（`/proc/bus/input/devices` 中 `H: Handlers=event20 js2`、`B: ABS=3003f`，左扳机 ABS_Z、右扳机 ABS_RZ，量程 0–255），当前用户经 uaccess ACL 可读并打开 `/dev/input/event20`，设备在线；因此阻塞不在权限或虚拟机 USB 直通。真实根因是 Flutter debug 构建默认开启的 Dart VM 采样分析器（约每秒 1000 次 SIGPROF）会打断阻塞中的 `poll(2)` 返回 `EINTR`，旧实现把 -1 当成“设备已断开”，worker 每约 1.03 秒走一次 ready → disconnected，界面停在「手柄已断开，正在重新查找…」。修复（2026-11-03，未提交）：① `poll()` 在 `EINTR` 时按剩余时间重试并用 Stopwatch 计时；② `open()` 的 `O_NONBLOCK` 从错误的第三参数（mode）移到 flags；③ `read()` 区分 EOF（0，视为断开）与 `EAGAIN` / `EINTR`（空读，继续轮询）；④ 新增 `GamepadSnapshotEmitter.reset()`，`start()` 时重置去重缓存，避免重新启用后第一条 ready 被吞；⑤ 删除每 5 秒强杀 isolate 的 `closed.future.timeout(5s)` 兜底，改用 `Isolate.spawn` 的 `onError` / `onExit` + 200 ms 冲刷最后消息，崩溃时上报 error 快照；⑥ worker 对空读继续轮询。验证：`flutter analyze`（`lib/features/expression_pedal`、`tool/probe_gamepad.dart`）无问题；`flutter test test/linux_gamepad_trigger_source_test.dart test/linux_evdev_test.dart test/linux_joystick_test.dart` 40 项全部通过；`dart --profiler tool/probe_gamepad.dart 12` 只输出一条 `status=ready device=Flydigi Apex 5 range=0-255`（修复前每隔约 1 秒 ready / searching 交替）。**GUI 端到端验证（2026-11-03 01:05–01:20）**：用 `build/flutter-sdk/bin/flutter run -d linux --pid-file .tools/verify_app.pid lib/main.dart` 启动构建于修复代码的独立实例，profiler 保持开启（`getFlagList` 中 profiler=true、profile_period=1000，即复现故障的同一条件），再通过 `/dev/uinput` 注入 Tab/Enter 操作真实窗口（打开「即兴工作台」，聚焦「启用手柄踏板」开关并按 Enter）。结果：① 打开开关后立即显示「已连接：Flydigi Apex 5」，不再是「手柄已断开，正在重新查找…」；② 连续 35 秒每 5 秒采样，状态始终为「已连接：Flydigi Apex 5」，未回落，进程 `/proc/<pid>/fd` 中恰好 1 个 `/dev/input/event20`，无 fd 泄漏、无周期重启；③ 关→开循环 3 次，每次关闭显示「未启用：打开开关后开始查找手柄并读取扳机。」，再打开 2 秒内恢复「已连接」，且仍恰好 1 个 event20 fd（覆盖快照去重 reset 与 stop/start 竞态）；④ 验证实例已 kill，用户原先运行的旧实例（PID 70133）未受影响。**注意**：hot reload 不会替换已运行的 isolate 代码，切换到修复版本后需热重启或重启 App；当前旧实例只是被临时通过 VM service 关掉 profiler 以便识别手柄，属于临时绕过，不代表修复生效。单元测试仍以合成事件和普通文件路径覆盖 Linux 输入层，`/dev/input/js*` 回退通道只以合成字节验证解析与换算；网页端只在注入的假手柄上实测，真实手柄未验证；Windows 输入层未构建、未运行；Android / iOS / macOS 未接入。真实扳机轴读数（ABS_Z / ABS_RZ 数值变化）与哇音扫频听感仍待用户实测（验证时无人按压物理扳机；CLI 探针只到 `status=ready` 与量程 0–255，未读到非空 rawValue）；蓝牙连接与第三方手柄的轴映射也待验证。
 
 ### 即兴录音混音时间轴修复（2026-10-31）
 

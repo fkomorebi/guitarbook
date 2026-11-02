@@ -38,6 +38,7 @@ class EvdevDevice {
     required this.name,
     required this.eventHandler,
     required this.absBits,
+    this.joystickHandler,
   });
 
   final String name;
@@ -47,6 +48,12 @@ class EvdevDevice {
 
   /// `B: ABS=` 能力位图，第 n 位对应 ABS 编码 n。
   final BigInt absBits;
+
+  /// 内核注册的 joystick 节点名，例如 `js2`；没有则为空。
+  ///
+  /// 有 joystick 节点说明内核把它当成手柄/摇杆；如果同时又没有线性扳机轴，
+  /// 就多半是 Switch Pro 这类“数字按键式扳机”。
+  final String? joystickHandler;
 }
 
 /// 在位的绝对轴编码。
@@ -72,24 +79,65 @@ bool supportsAnalogTrigger(BigInt absBits) =>
     resolveTriggerAxis(absBits, PedalTrigger.left) != null ||
     resolveTriggerAxis(absBits, PedalTrigger.right) != null;
 
+/// 摇杆类绝对轴：摇杆、方向键、油门刹车等。
+///
+/// 只带 ABS_X / ABS_Y 的设备多半是触控板或绘图板，不是手柄。
+const List<int> _stickLikeAxes = [
+  absZ, // ABS_Z
+  0x03, // ABS_RX
+  0x04, // ABS_RY
+  absRz, // ABS_RZ
+  0x06, // ABS_THROTTLE
+  0x07, // ABS_RUDDER
+  0x08, // ABS_WHEEL
+  absGas, // ABS_GAS
+  absBrake, // ABS_BRAKE
+  0x10, // ABS_HAT0X
+  0x11, // ABS_HAT0Y
+  0x12, // ABS_HAT1X
+  0x13, // ABS_HAT1Y
+  absHat2X, // ABS_HAT2X
+  absHat2Y, // ABS_HAT2Y
+];
+
+/// 设备看起来是不是手柄。
+///
+/// 内核会把触控板（QEMU tablet、spice vdagent）也注册成 joystick 节点，
+/// 只看 joystick 节点会把它们误当成“数字按键式扳机”的手柄。这里要求设备
+/// 至少还有一路摇杆类的绝对轴，才认为是手柄。
+bool looksLikeGamepad(EvdevDevice device) {
+  if (device.joystickHandler == null) return false;
+  for (final code in _stickLikeAxes) {
+    if (hasAbsCode(device.absBits, code)) return true;
+  }
+  return false;
+}
+
 /// 解析 `/proc/bus/input/devices` 文本，只保留带 `eventN` 节点的设备。
 List<EvdevDevice> parseProcInputDevices(String text) {
   final devices = <EvdevDevice>[];
   String? name;
   BigInt absBits = BigInt.zero;
   String? eventHandler;
+  String? joystickHandler;
 
   void flush() {
     final deviceName = name;
     final handler = eventHandler;
     if (deviceName != null && handler != null) {
       devices.add(
-        EvdevDevice(name: deviceName, eventHandler: handler, absBits: absBits),
+        EvdevDevice(
+          name: deviceName,
+          eventHandler: handler,
+          absBits: absBits,
+          joystickHandler: joystickHandler,
+        ),
       );
     }
     name = null;
     absBits = BigInt.zero;
     eventHandler = null;
+    joystickHandler = null;
   }
 
   for (final line in text.split('\n')) {
@@ -104,6 +152,8 @@ List<EvdevDevice> parseProcInputDevices(String text) {
           in line.substring('H: Handlers='.length).split(RegExp(r'\s+'))) {
         if (token.startsWith('event') && token.length > 'event'.length) {
           eventHandler = token;
+        } else if (token.startsWith('js') && token.length > 'js'.length) {
+          joystickHandler = token;
         }
       }
     } else if (line.startsWith('B: ABS=')) {

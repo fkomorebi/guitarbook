@@ -124,10 +124,23 @@ public:
                 throw String::fromUTF8("请选择有效的音频输入和输出设备。");
             failed = false;
             enabled = true;
+            monitorRequested = true;
         } else if (action == "stop") {
             enabled = false;
+            monitorRequested = false;
             devices.closeAudioDevice();
             inputPeak = outputPeak = 0;
+            silentBlocks = 0;
+        } else if (action == "reopen") {
+            // Force a fresh device open: recovers a capture that went silent
+            // after the interface was re-enumerated, renamed or unplugged.
+            const bool resume = enabled;
+            enabled = false;
+            devices.closeAudioDevice();
+            silentBlocks = 0;
+            ensureDevice();
+            failed = false;
+            enabled = resume;
         } else if (action == "builtin") {
             if (chain.size() >= 8) throw String::fromUTF8("最多添加 8 个效果器。");
             auto plugin = std::make_unique<BuiltinEffect>(request["kind"].toString());
@@ -352,10 +365,17 @@ public:
                     wetOnly.add(builtin->getName());
             }
         }
+        // A device that vanished or errored is reopened in the background so the
+        // user does not have to restart monitoring by hand. Only live monitoring
+        // (started through "start" on a real device) may recover this way.
+        if (enabled && monitorRequested && initialised
+            && (devices.getCurrentAudioDevice() == nullptr || failed.load()))
+            tryRecoverDevice();
         auto* device = devices.getCurrentAudioDevice();
         bool running = enabled && device != nullptr && !failed;
         double currentRate = device ? device->getCurrentSampleRate() : rate;
         const auto setup = devices.getAudioDeviceSetup();
+        const double blockMs = device ? 1000.0 * device->getCurrentBufferSizeSamples() / currentRate : 0.0;
         return object({{"audioOpen", device != nullptr}, {"backend", devices.getCurrentAudioDeviceType()},
             {"inputDevice", setup.inputDeviceName}, {"outputDevice", setup.outputDeviceName},
             {"requestedBuffer", requestedBuffer}, {"setupNotice", setupNotice},
@@ -363,13 +383,16 @@ public:
             {"inputLatencyMs", device ? 1000.0 * device->getInputLatencyInSamples() / currentRate : 0.0},
             {"outputLatencyMs", device ? 1000.0 * device->getOutputLatencyInSamples() / currentRate : 0.0},
             {"pluginLatencyMs", 1000.0 * latency / currentRate},
-            {"blockMs", device ? 1000.0 * device->getCurrentBufferSizeSamples() / currentRate : 0.0},
+            {"blockMs", blockMs},
             {"xruns", devices.getXRunCount()}, {"wetOnly", wetOnly},
             {"running", running}, {"failed", failed.load()},
             {"inputPeak", inputPeak.exchange(0)}, {"outputPeak", outputPeak.exchange(0)},
             {"gain", gain.load()}, {"sampleRate", currentRate},
             {"bufferSize", device ? device->getCurrentBufferSizeSamples() : block},
             {"device", device ? device->getName() : String()},
+            {"inputChannels", device ? device->getActiveInputChannels().countNumberOfSetBits() : 0},
+            {"outputChannels", device ? device->getActiveOutputChannels().countNumberOfSetBits() : 0},
+            {"noInputSignal", running && blockMs > 0.0 && silentBlocks.load() * blockMs >= 1500.0},
             {"latencyMs", device ? 1000.0 * (device->getInputLatencyInSamples()
                 + device->getOutputLatencyInSamples() + latency) / currentRate : 0.0},
             {"cpu", devices.getCpuUsage()}, {"plugins", plugins}});
@@ -388,8 +411,14 @@ public:
         }
         failed = false;
     }
-    void audioDeviceStopped() override { wetActive = false; enabled = false; inputPeak = outputPeak = 0; }
-    void audioDeviceError(const String&) override { wetActive = false; failed = true; enabled = false; }
+    void audioDeviceStopped() override {
+        wetActive = false;
+        inputPeak = outputPeak = 0;
+        // `enabled` is kept on purpose: swapping the device inside the settings
+        // window must not end monitoring, and `running` already requires an
+        // open device.
+    }
+    void audioDeviceError(const String&) override { wetActive = false; failed = true; }
 
     void audioDeviceIOCallbackWithContext(const float* const* inputs, int numInputs,
         float* const* outputs, int numOutputs, int samples, const AudioIODeviceCallbackContext&) override {
@@ -405,7 +434,10 @@ public:
             if (input) buffer.copyFrom(ch, 0, input, samples);
             else buffer.clear(ch, 0, samples);
         }
-        inputPeak = jmax(inputPeak.load(), buffer.getMagnitude(0, 0, samples));
+        const auto magnitude = buffer.getMagnitude(0, 0, samples);
+        inputPeak = jmax(inputPeak.load(), magnitude);
+        // Track stretches of pure silence so the UI can flag a dead capture.
+        if (magnitude > 1.0e-4f) silentBlocks = 0; else silentBlocks += 1;
         MidiBuffer midi;
         for (auto& item : chain) {
             if (item.bypass) continue;
@@ -460,35 +492,63 @@ private:
     }
     void ensureDevice() {
         if (devices.getCurrentAudioDevice() != nullptr) return;
-        if (!initialised) {
-            String error;
-           #if JUCE_LINUX
-            const int original = requestedBuffer;
-            for (int frames : {requestedBuffer, 256, 512}) {
-                if (frames < original) continue;
-                requestedBuffer = frames;
-                prepareAudioEnvironment();
-                AudioDeviceManager::AudioDeviceSetup preferred;
-                preferred.sampleRate = 48000;
-                preferred.bufferSize = frames;
-                error = devices.initialise(1, 2, nullptr, true, {}, &preferred);
-                if (error.isEmpty()) break;
-                devices.closeAudioDevice();
-            }
-            if (error.isNotEmpty()) {
-                requestedBuffer = original;
-                prepareAudioEnvironment();
-            }
-            if (requestedBuffer != original && error.isEmpty())
-                setupNotice = String::fromUTF8("低缓冲打开失败，已回退至 ") + String(requestedBuffer) + String::fromUTF8(" 帧。");
-           #else
-            error = devices.initialise(1, 2, nullptr, true);
-           #endif
-            if (error.isNotEmpty()) throw error;
-            devices.addAudioCallback(this);
-            initialised = true;
-        } else devices.restartLastAudioDevice();
+        if (initialised) {
+            // The saved device may have disappeared (USB interface re-enumerated,
+            // renamed or unplugged); reopening it can silently fail, so fall back
+            // to a fresh initialisation when it does not come back.
+            devices.restartLastAudioDevice();
+            if (devices.getCurrentAudioDevice() != nullptr) return;
+            devices.closeAudioDevice();
+            initialised = false;
+        }
+        if (callbackAdded) {
+            devices.removeAudioCallback(this);
+            callbackAdded = false;
+        }
+        String error;
+       #if JUCE_LINUX
+        const int original = requestedBuffer;
+        for (int frames : {requestedBuffer, 256, 512}) {
+            if (frames < original) continue;
+            requestedBuffer = frames;
+            prepareAudioEnvironment();
+            AudioDeviceManager::AudioDeviceSetup preferred;
+            preferred.sampleRate = 48000;
+            preferred.bufferSize = frames;
+            error = devices.initialise(1, 2, nullptr, true, {}, &preferred);
+            if (error.isEmpty()) break;
+            devices.closeAudioDevice();
+        }
+        if (error.isNotEmpty()) {
+            requestedBuffer = original;
+            prepareAudioEnvironment();
+        }
+        if (requestedBuffer != original && error.isEmpty())
+            setupNotice = String::fromUTF8("低缓冲打开失败，已回退至 ") + String(requestedBuffer) + String::fromUTF8(" 帧。");
+       #else
+        error = devices.initialise(1, 2, nullptr, true);
+       #endif
+        if (error.isNotEmpty()) throw error;
+        devices.addAudioCallback(this);
+        callbackAdded = true;
+        initialised = true;
         if (devices.getCurrentAudioDevice() == nullptr) throw String::fromUTF8("无法打开声卡，请检查设备与系统音频设置。");
+    }
+    void tryRecoverDevice() {
+        const auto now = juce::Time::getHighResolutionTicks();
+        if (lastRecoveryAttempt != 0) {
+            const auto elapsedMs = (now - lastRecoveryAttempt) * 1000
+                / juce::Time::getHighResolutionTicksPerSecond();
+            if (elapsedMs < 2000) return;
+        }
+        lastRecoveryAttempt = now;
+        if (devices.getCurrentAudioDevice() != nullptr) devices.closeAudioDevice();
+        try {
+            ensureDevice();
+            failed = false;
+        } catch (...) {
+            failed = true;
+        }
     }
     struct Effect {
         std::unique_ptr<AudioProcessor> plugin;
@@ -515,6 +575,10 @@ private:
     const bool externalPipewireQuantum = std::getenv("PIPEWIRE_QUANTUM") != nullptr;
     String setupNotice;
     bool initialised = false;
+    bool callbackAdded = false;
+    bool monitorRequested = false;
+    juce::int64 lastRecoveryAttempt = 0;
+    std::atomic<int> silentBlocks{0};
     std::atomic<bool> enabled{false}, failed{false};
     std::atomic<float> inputPeak{0}, outputPeak{0}, gain{0.5f};
 };

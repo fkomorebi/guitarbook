@@ -1,7 +1,8 @@
 import 'gamepad_trigger.dart';
 
-/// Web 端没有读取手柄线性扳机的通道。
+/// 既不是桌面（dart:io）也不是网页（dart:js_interop）时的兜底实现。
 GamepadTriggerSource createGamepadTriggerSource() =>
     UnsupportedGamepadTriggerSource(
-      'Web 版暂不支持读取手柄线性扳机，请在 Linux 或 Windows 桌面版使用。',
+      '当前平台暂不支持读取手柄线性扳机；'
+      '目前支持 Linux 与 Windows 桌面版，以及浏览器（Gamepad API）。',
     );

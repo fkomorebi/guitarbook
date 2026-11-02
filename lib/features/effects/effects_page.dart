@@ -50,8 +50,32 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
   int _lifecycleRevision = 0;
   String? _error;
 
+  /// 用户是否希望保持监听：窗口最小化等生命周期变化会临时释放声卡，
+  /// 回到前台后自动续上监听。
+  bool _monitorRequested = false;
+
+  /// 宿主上报的设备中断提示；设备恢复后自动清除。
+  static const String _deviceLostMessage = '音频设备已中断，正在尝试重连…';
+
   bool get _running => _status['running'] == true;
+
+  /// 正在监听但采集不到任何输入信号：声卡多半重连过或输入通道选错。
+  bool get _noInputSignal => _running && _status['noInputSignal'] == true;
   List<dynamic> get _plugins => _status['plugins'] as List<dynamic>? ?? [];
+
+  /// 采集与输出链路的当前状态摘要。
+  String _deviceSummary() {
+    final input = (_status['inputChannels'] as num?) ?? 0;
+    final output = (_status['outputChannels'] as num?) ?? 0;
+    final latency = (_status['latencyMs'] as num?) ?? 0;
+    final backend = _status['backend']?.toString() ?? '';
+    return [
+      '输入 $input 声道',
+      '输出 $output 声道',
+      if (backend.isNotEmpty) '后端 $backend',
+      '延迟 ${latency.toStringAsFixed(1)} ms',
+    ].join(' · ');
+  }
 
   @override
   void initState() {
@@ -81,7 +105,11 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
         setState(() {
           _status = status;
           _pedalTargetIndex = _validPedalTarget(_pedalTargetIndex);
-          if (status['failed'] == true) _error = '音频设备已中断，请检查连接后重新开始监听。';
+          if (status['failed'] == true) {
+            _error = _deviceLostMessage;
+          } else if (_error == _deviceLostMessage) {
+            _error = null;
+          }
         });
       }
     } catch (error) {
@@ -116,6 +144,8 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
         _status = status;
         _pedalTargetIndex = _validPedalTarget(_pedalTargetIndex);
         if (command == 'probe') _available = status['available'] == true;
+        if (command == 'start') _monitorRequested = true;
+        if (command == 'stop') _monitorRequested = false;
         _error = null;
       });
     } catch (error) {
@@ -289,6 +319,11 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
               }),
         );
       }
+    } else if (state == AppLifecycleState.resumed) {
+      // 最小化窗口会释放声卡，回到前台后自动恢复监听。
+      if (_monitorRequested && !_running && !_busy) {
+        unawaited(_send('start'));
+      }
     }
   }
 
@@ -310,7 +345,8 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
     final theme = Theme.of(context);
     final supported = _backend.supported;
     final canEdit = supported && !_busy;
-    final canConfigure = canEdit && !_running;
+    // 监听中也能打开设备设置：声卡重连或输入通道选错时必须能立刻改。
+    final canConfigure = canEdit;
     final content = Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 1480),
@@ -342,7 +378,9 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                 _busy
                     ? '正在检查效果器与音频设备…'
                     : _running
-                    ? '效果器监听中，可同时调节鼓机与 Looper 音量。'
+                    ? _noInputSignal
+                        ? '效果器已连接，但没有采集到输入信号，请检查声卡输入通道。'
+                        : '效果器监听中，可同时调节鼓机与 Looper 音量。'
                     : _available && _error == null
                     ? '检测通过：引擎和音频输入/输出可用，尚未开始监听。'
                     : '可用性以设备实际打开结果为准；连接或权限变化后可重新检测。',
@@ -410,6 +448,39 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                   style: TextStyle(color: theme.colorScheme.error),
                 ),
               ),
+            if (_noInputSignal)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '未检测到输入信号：声卡可能刚刚重连，或吉他不在当前输入通道。',
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: canEdit ? () => _send('reopen') : null,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('重新连接设备'),
+                        ),
+                        if (_backend.supportsDeviceSettings)
+                          OutlinedButton.icon(
+                            onPressed: canConfigure
+                                ? () => _send('settings')
+                                : null,
+                            icon: const Icon(Icons.settings_input_component),
+                            label: const Text('声卡与输入通道'),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 16),
             Card(
               child: Padding(
@@ -461,6 +532,11 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                         Text(
                           _running ? '正在监听' : '监听已停止',
                           style: theme.textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _deviceSummary(),
+                          style: theme.textTheme.bodySmall,
                         ),
                         const SizedBox(height: 12),
                         if (wide)

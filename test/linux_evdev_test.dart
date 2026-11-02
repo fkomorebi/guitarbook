@@ -99,6 +99,24 @@ void main() {
       );
       expect(devices.single.absBits, BigInt.zero);
     });
+
+    test('记录内核注册的 joystick 节点，用来识别数字按键式手柄', () {
+      final devices = parseProcInputDevices(_procSample);
+      expect(devices[0].eventHandler, 'event5');
+      expect(devices[0].joystickHandler, 'js0');
+      expect(devices[1].joystickHandler, isNull);
+      expect(devices[2].joystickHandler, isNull);
+    });
+
+    test('Handlers 里只有 event 节点时没有 joystick 记录', () {
+      final devices = parseProcInputDevices('''
+N: Name="Plain Keyboard"
+H: Handlers=event1
+B: ABS=0
+''');
+      expect(devices.single.eventHandler, 'event1');
+      expect(devices.single.joystickHandler, isNull);
+    });
   });
 
   group('parseAbsBitmap', () {

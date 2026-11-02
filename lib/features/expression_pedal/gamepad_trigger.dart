@@ -139,4 +139,13 @@ class GamepadSnapshotEmitter {
     _last = snapshot;
     if (!_controller.isClosed) _controller.add(snapshot);
   }
+
+  /// 清空去重记录，让下一次 [emit] 的快照一定被发出。
+  ///
+  /// 每次开始新的读取会话前都要调用：停用/切换扳机后重新启用的第一条
+  /// `ready` 快照（`rawValue` 仍为 null）往往与上一次会话完全相同，如果
+  /// 保留 [_last] 就会把它当成重复而丢弃，界面会一直停在“正在查找手柄…”。
+  void reset() {
+    _last = null;
+  }
 }

@@ -64,7 +64,17 @@ class ExpressionPedalPanel extends StatelessWidget {
                   value: controller.enabled,
                   onChanged: canConfigure ? onEnabledChanged : null,
                 ),
-                if (controller.enabled) ..._activeControls(context, theme),
+                if (controller.enabled) ...[
+                  if (controller.status == GamepadInputStatus.searching)
+                    _hint(
+                      theme,
+                      '系统没有发现手柄时就会停在这里：无线手柄休眠、蓝牙断开或'
+                      '虚拟机 USB 直通断开后，系统会移除设备节点；'
+                      '请确认手柄已唤醒并在系统“手柄/游戏手柄”设置里在线。'
+                      '如果系统里明明列出了手柄却读不到，请看下面的权限说明。',
+                    ),
+                  ..._activeControls(context, theme),
+                ],
               ],
             ],
           ),
@@ -191,6 +201,8 @@ class ExpressionPedalPanel extends StatelessWidget {
   }
 
   String _statusText() {
+    // 未启用时读取源根本还没启动，不能说“正在查找手柄”。
+    if (!controller.enabled) return '未启用：打开开关后开始查找手柄并读取扳机。';
     switch (controller.status) {
       case GamepadInputStatus.unsupported:
         return '当前平台不支持读取手柄';

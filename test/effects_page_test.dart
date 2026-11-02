@@ -577,7 +577,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('启动期间后台停止，恢复不自动重启', (tester) async {
+  testWidgets('启动期间后台停止，回到前台自动恢复监听', (tester) async {
     final ready = Completer<void>();
     final backend = FakeEffects()..starting = ready;
     await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
@@ -588,9 +588,9 @@ void main() {
     expect(backend.running, isFalse);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump();
-    expect(backend.calls.where((c) => c == 'start'), hasLength(1));
-    await tester.tap(find.text('开始监听'));
     await tester.pump();
+    // 最小化窗口会释放声卡，回到前台后自动恢复监听。
+    expect(backend.calls.where((c) => c == 'start'), hasLength(2));
     expect(backend.running, isTrue);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
     await tester.pump();
@@ -903,6 +903,36 @@ void main() {
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('未启用时不显示“正在查找手柄”，启用后才开始查找', (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    await backend.send('builtin', {'kind': 'wah'});
+    final source = FakeGamepadTriggerSource();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: EffectsPage(backend: backend, pedalSource: source),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _scrollTo(tester, find.text('手柄线性扳机 → 哇音踏板'));
+    expect(find.textContaining('未启用'), findsOneWidget);
+    expect(find.textContaining('正在查找手柄'), findsNothing);
+    expect(source.startCalls, isEmpty);
+
+    final toggle = find.byKey(const ValueKey('expression-pedal-enabled'));
+    await _scrollTo(tester, toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(source.startCalls, [PedalTrigger.right]);
+    expect(find.textContaining('正在查找手柄'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 }

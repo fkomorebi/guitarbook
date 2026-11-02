@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
 import 'linux_abs_info.dart';
+import 'linux_joystick.dart';
 
 /// `poll(2)` 的事件位。
 const int pollIn = 0x001;
@@ -105,8 +106,10 @@ class LinuxEvdevIo {
     _load();
     final nativePath = path.toNativeUtf8();
     try {
-      // open 是变参函数；不传 O_CREAT 时第三个参数会被忽略。
-      final fd = _open!(nativePath, 0, _oNonBlock);
+      // flags = O_RDONLY | O_NONBLOCK（O_RDONLY 是 0），第三个参数是
+      // `mode`，只有带 O_CREAT 时才有意义，这里传 0。之前把 O_NONBLOCK 放
+      // 在第三个参数、flags 传 0，fd 实际是阻塞的。
+      final fd = _open!(nativePath, _oNonBlock, 0);
       return EvdevOpenResult(fd, fd < 0 ? _errno() : 0);
     } finally {
       malloc.free(nativePath);
@@ -126,18 +129,46 @@ class LinuxEvdevIo {
     }
   }
 
+  /// 读取旧版 joystick 接口的轴映射表（下标是旧版轴号，值是 evdev ABS
+  /// 编码）；设备不支持这个 ioctl 时返回 null。
+  List<int>? jsAxisMap(int fd) {
+    _load();
+    final buffer = calloc<Uint8>(jsAxisMapSize);
+    try {
+      if (_ioctl!(fd, jsIoctlGetAxisMap, buffer.cast<Void>()) < 0) return null;
+      return List<int>.generate(jsAxisMapSize, (index) => buffer[index]);
+    } finally {
+      calloc.free(buffer);
+    }
+  }
+
+  /// 等待可读事件，最多等 [timeout]；返回 `revents`，超时返回 0，失败返回 -1。
+  ///
+  /// 调试构建里 Dart VM 的采样分析器默认开启（`profile_period` 约 1 毫秒），
+  /// 它发的 SIGPROF 会打断阻塞中的 `poll(2)` 并返回 `EINTR`。如果不重试，读取
+  /// 线程会把每次信号都当成“设备断开”，界面就会在“已连接”和“手柄已断开”
+  /// 之间反复跳。所以这里按剩余时间重试，而不是直接返回 -1。
   int poll(int fd, Duration timeout) {
     _load();
     final pollFd = _pollFd ??= calloc<_PollFd>();
-    pollFd.ref
-      ..fd = fd
-      ..events = pollIn
-      ..revents = 0;
-    final result = _poll!(pollFd, 1, timeout.inMilliseconds);
-    if (result < 0) return -1;
-    return pollFd.ref.revents;
+    final stopwatch = Stopwatch()..start();
+    while (true) {
+      pollFd.ref
+        ..fd = fd
+        ..events = pollIn
+        ..revents = 0;
+      final remaining = timeout.inMilliseconds - stopwatch.elapsedMilliseconds;
+      final result = _poll!(pollFd, 1, remaining < 0 ? 0 : remaining);
+      if (result >= 0) return pollFd.ref.revents;
+      if (_errno() != _eintr) return -1;
+      if (stopwatch.elapsedMilliseconds >= timeout.inMilliseconds) return 0;
+    }
   }
 
+  /// 读取事件数据。
+  ///
+  /// - 返回 `null`：读失败或读到 EOF（设备已被移除），调用方应视为断开。
+  /// - 返回空列表：非阻塞 fd 暂时没有数据（或被信号打断），调用方应继续轮询。
   Uint8List? read(int fd, int maxBytes) {
     _load();
     final buffer = _readBuffer ??= calloc<Uint8>(bufferSize);
@@ -148,6 +179,8 @@ class LinuxEvdevIo {
       if (code == _eagain || code == _eintr) return Uint8List(0);
       return null;
     }
+    // evdev 没有事件时不会返回 0；返回 0 说明设备节点已经结束。
+    if (result == 0) return null;
     return Uint8List.fromList(buffer.asTypedList(result));
   }
 
