@@ -379,7 +379,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                     ? '正在检查效果器与音频设备…'
                     : _running
                     ? _noInputSignal
-                        ? '效果器已连接，但没有采集到输入信号，请检查声卡输入通道。'
+                        ? '效果器已连接，但没有采集到任何输入数据：输入设备可能不是吉他所在的接口。'
                         : '效果器监听中，可同时调节鼓机与 Looper 音量。'
                     : _available && _error == null
                     ? '检测通过：引擎和音频输入/输出可用，尚未开始监听。'
@@ -455,8 +455,18 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '未检测到输入信号：声卡可能刚刚重连，或吉他不在当前输入通道。',
-                      style: TextStyle(color: theme.colorScheme.error),
+                      '没有收到任何输入数据。',
+                      style: TextStyle(
+                        color: theme.colorScheme.error,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '监听已开始，但采到的全是数字静音。常见原因：系统或应用的输入'
+                      '设备不是吉他所在接口（Linux 上声卡常被拆成麦克风、回环通道，'
+                      '例如 “Monitor Input”），或声卡刚刚重连。声卡直通监听有声，'
+                      '不代表软件已经采到信号。',
                     ),
                     const SizedBox(height: 8),
                     Wrap(

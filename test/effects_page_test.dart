@@ -15,6 +15,7 @@ class FakeEffects extends EffectsBackend {
   bool running = false;
   bool released = false;
   bool fail = false;
+  bool noInputSignal = false;
   int frames = 128;
   double gain = 0.5;
   Completer<void>? starting;
@@ -152,6 +153,7 @@ class FakeEffects extends EffectsBackend {
       'inputPeak': 0.25,
       'outputPeak': 0.1,
       'latencyMs': 6,
+      'noInputSignal': noInputSignal,
     };
   }
 
@@ -522,6 +524,44 @@ void main() {
     expect(find.textContaining('驱动报告：输入 8.0 ms'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('监听中只有数字静音时提示输入设备可能不是吉他接口', (tester) async {
+    tester.view.physicalSize = const Size(1440, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    final backend = FakeEffects();
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pump();
+    expect(backend.running, isTrue);
+    expect(find.text('没有收到任何输入数据。'), findsNothing);
+
+    backend.noInputSignal = true;
+    await tester.pump(const Duration(milliseconds: 150));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('没有收到任何输入数据。'),
+      150,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('没有收到任何输入数据。'), findsOneWidget);
+    expect(find.textContaining('回环通道'), findsOneWidget);
+    expect(find.text('重新连接设备'), findsOneWidget);
+    expect(find.text('声卡与输入通道'), findsWidgets);
+
+    backend.noInputSignal = false;
+    await tester.pump(const Duration(milliseconds: 150));
+    await tester.pumpAndSettle();
+    expect(find.text('没有收到任何输入数据。'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    expect(backend.released, isTrue);
   });
 
   testWidgets('内置效果可重复添加、独立调参、排序和移除', (tester) async {

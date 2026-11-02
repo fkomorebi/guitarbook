@@ -122,6 +122,11 @@ public:
             if (device == nullptr || device->getActiveInputChannels().isZero()
                 || device->getActiveOutputChannels().isZero())
                 throw String::fromUTF8("请选择有效的音频输入和输出设备。");
+            // Never inherit silence measured before this session: the device
+            // may just have been re-opened, and the first blocks after a
+            // (re)connect can arrive empty while the converter settles.
+            inputPeak = outputPeak = 0;
+            silentBlocks = 0;
             failed = false;
             enabled = true;
             monitorRequested = true;
@@ -392,7 +397,9 @@ public:
             {"device", device ? device->getName() : String()},
             {"inputChannels", device ? device->getActiveInputChannels().countNumberOfSetBits() : 0},
             {"outputChannels", device ? device->getActiveOutputChannels().countNumberOfSetBits() : 0},
-            {"noInputSignal", running && blockMs > 0.0 && silentBlocks.load() * blockMs >= 1500.0},
+            // 3 s of continuous digital silence: long enough that a freshly
+            // (re)opened device is not flagged before it delivers audio.
+            {"noInputSignal", running && blockMs > 0.0 && silentBlocks.load() * blockMs >= 3000.0},
             {"latencyMs", device ? 1000.0 * (device->getInputLatencyInSamples()
                 + device->getOutputLatencyInSamples() + latency) / currentRate : 0.0},
             {"cpu", devices.getCpuUsage()}, {"plugins", plugins}});
@@ -410,6 +417,10 @@ public:
             item.plugin->prepareToPlay(rate, block);
         }
         failed = false;
+        // A new device session (re-open, re-enumeration, settings change) must
+        // not be reported as dead capture before it delivered its first block.
+        silentBlocks = 0;
+        inputPeak = outputPeak = 0;
     }
     void audioDeviceStopped() override {
         wetActive = false;
@@ -436,8 +447,13 @@ public:
         }
         const auto magnitude = buffer.getMagnitude(0, 0, samples);
         inputPeak = jmax(inputPeak.load(), magnitude);
-        // Track stretches of pure silence so the UI can flag a dead capture.
-        if (magnitude > 1.0e-4f) silentBlocks = 0; else silentBlocks += 1;
+        // Only *digital* silence means the capture stream carries no audio at
+        // all (system default input is a loopback/monitor node, wrong node,
+        // dead stream). A real converter input always keeps a noise floor well
+        // above zero even when nothing is played, so quiet passages and the
+        // pauses between notes must not count as a broken input.
+        if (magnitude > 0.0f) silentBlocks = 0;
+        else if (silentBlocks.load() < 1000000) silentBlocks += 1;
         MidiBuffer midi;
         for (auto& item : chain) {
             if (item.bypass) continue;
@@ -578,6 +594,7 @@ private:
     bool callbackAdded = false;
     bool monitorRequested = false;
     juce::int64 lastRecoveryAttempt = 0;
+    // Consecutive blocks of exact digital silence; see audioDeviceIOCallback.
     std::atomic<int> silentBlocks{0};
     std::atomic<bool> enabled{false}, failed{false};
     std::atomic<float> inputPeak{0}, outputPeak{0}, gain{0.5f};
