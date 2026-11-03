@@ -1333,5 +1333,349 @@
         }
       ]
     }
+  },
+  "round2": {
+    "generatedAt": "2026-11-03T10:51:40.050Z",
+    "note": "第二轮：在同一台机器、同一 Scarlett 硬件环回采集上，测 Chrome --audio-buffer-size 与 PipeWire clock.quantum 对往返延迟的影响。",
+    "method": [
+      "脉冲串与检测方式与第一轮一致（tool/check_web_latency.mjs），基线组为 latencyHint 数字 0（group D）。",
+      "--audio-buffer-size 是 Chrome 进程级参数，每种取值单独起一个 Chrome 实例，避免互相污染。",
+      "PipeWire quantum 用 `pw-metadata -n settings 0 clock.quantum <值>` 临时改，测完恢复 1024。"
+    ],
+    "caveats": [
+      "Chrome 的采集设备是 ALSA 硬件环回输入（Scarlett Solo 4th Gen Monitor Input 3+4），不经过 PipeWire，因此 clock.quantum 对采集腿基本没有影响。",
+      "同一天内两次独立会话的绝对值差异不小（上午 D 组 126.271 ms，晚上 D 组 66.6–74.6 ms），脚本与设备相同；差值来自系统音频图状态，绝对值不可跨会话混用，只能比较同一会话内的差值。",
+      "同一 Chrome 实例内多次运行可重复到 0.001 ms，但不同实例之间会差 2–8 ms（一个渲染量子 2.667 ms 量级）。"
+    ],
+    "chromeAudioBufferSize": {
+      "summary": "Chrome 采集缓冲随 --audio-buffer-size 缩小（21.333 → 2.666/1.333/5.333 ms），往返延迟从约 69–75 ms 降到约 45–48 ms；64 与 128 之间的差别在一个量子以内，属于噪声。",
+      "rows": [
+        {
+          "session": "2026-11-03 下午",
+          "group": "D",
+          "chromeFlags": [],
+          "quantum": 1024,
+          "medianMs": 71.958,
+          "minMs": 69.292,
+          "chromeReportedCaptureLatencyMs": 21.333,
+          "chromeReportedBaseLatencyMs": 2.667
+        },
+        {
+          "session": "2026-11-03 下午",
+          "group": "G",
+          "chromeFlags": [
+            "--audio-buffer-size=128"
+          ],
+          "quantum": 1024,
+          "medianMs": 45.292,
+          "minMs": 45.292,
+          "chromeReportedCaptureLatencyMs": 2.666,
+          "chromeReportedBaseLatencyMs": 2.667
+        },
+        {
+          "session": "2026-11-03 下午",
+          "group": "H",
+          "chromeFlags": [
+            "--audio-buffer-size=256"
+          ],
+          "quantum": 1024,
+          "medianMs": 47.958,
+          "minMs": 47.958,
+          "chromeReportedCaptureLatencyMs": 5.333,
+          "chromeReportedBaseLatencyMs": 2.667
+        },
+        {
+          "session": "2026-11-03 晚（量子对照）",
+          "group": "D",
+          "chromeFlags": [],
+          "quantum": 1024,
+          "medianMs": 74.625,
+          "minMs": 71.958,
+          "chromeReportedCaptureLatencyMs": 21.333,
+          "chromeReportedBaseLatencyMs": 2.667
+        },
+        {
+          "session": "2026-11-03 晚（同会话四组）",
+          "group": "D",
+          "chromeFlags": [],
+          "quantum": 1024,
+          "medianMs": 69.292,
+          "minMs": 66.625,
+          "chromeReportedCaptureLatencyMs": 21.333,
+          "chromeReportedBaseLatencyMs": 2.667
+        },
+        {
+          "session": "2026-11-03 晚（同会话四组）",
+          "group": "G",
+          "chromeFlags": [
+            "--audio-buffer-size=128"
+          ],
+          "quantum": 1024,
+          "medianMs": 47.958,
+          "minMs": 45.292,
+          "chromeReportedCaptureLatencyMs": 2.666,
+          "chromeReportedBaseLatencyMs": 2.667
+        },
+        {
+          "session": "2026-11-03 晚（同会话四组）",
+          "group": "H",
+          "chromeFlags": [
+            "--audio-buffer-size=256"
+          ],
+          "quantum": 1024,
+          "medianMs": 45.292,
+          "minMs": 45.292,
+          "chromeReportedCaptureLatencyMs": 5.333,
+          "chromeReportedBaseLatencyMs": 2.667
+        },
+        {
+          "session": "2026-11-03 晚（同会话四组）",
+          "group": "I",
+          "chromeFlags": [
+            "--audio-buffer-size=64"
+          ],
+          "quantum": 1024,
+          "medianMs": 47.958,
+          "minMs": 45.292,
+          "chromeReportedCaptureLatencyMs": 1.333,
+          "chromeReportedBaseLatencyMs": 2.667
+        }
+      ],
+      "recommendedFlag": "--audio-buffer-size=128",
+      "recommendedFlagReason": "128 帧已能把采集缓冲降到 2.7 ms；更小的 64 帧没有额外收益（往返仍为 45–48 ms），256 帧略差（采集缓冲 5.3 ms）。"
+    },
+    "pipewireClockQuantum": {
+      "summary": "在本机（Chrome 采集走 ALSA 硬件环回）clock.quantum 128/256/1024 的往返差别落在噪声范围内，未观察到稳定收益；quantum 对走 Pulse 的桌面端链路仍可能有意义。",
+      "rows": [
+        {
+          "quantum": 1024,
+          "group": "D",
+          "medianMs": 71.958,
+          "minMs": 69.292,
+          "chromeReportedCaptureLatencyMs": 21.333
+        },
+        {
+          "quantum": 1024,
+          "group": "D",
+          "medianMs": 74.625,
+          "minMs": 71.958,
+          "chromeReportedCaptureLatencyMs": 21.333
+        },
+        {
+          "quantum": 1024,
+          "group": "D",
+          "medianMs": 74.625,
+          "minMs": 69.292,
+          "chromeReportedCaptureLatencyMs": 21.333
+        },
+        {
+          "quantum": 256,
+          "group": "D",
+          "medianMs": 66.625,
+          "minMs": 66.625,
+          "chromeReportedCaptureLatencyMs": 21.333
+        },
+        {
+          "quantum": 128,
+          "group": "D",
+          "medianMs": 74.625,
+          "minMs": 69.292,
+          "chromeReportedCaptureLatencyMs": 21.333
+        }
+      ],
+      "withChromeFlag128": [
+        {
+          "quantum": 1024,
+          "medianMs": 45.292,
+          "minMs": 45.292
+        },
+        {
+          "quantum": 256,
+          "medianMs": 47.958,
+          "minMs": 45.292
+        },
+        {
+          "quantum": 128,
+          "medianMs": 45.292,
+          "minMs": 45.292
+        }
+      ]
+    },
+    "takeaways": [
+      "网页端剩余约 45 ms 的往返延迟不在 Chrome 的缓冲里（采集缓冲已降到 2.7 ms），而在 Pulse/ALSA 播放路径与硬件环回上，网页无法再压缩。",
+      "网页端可控项只有一个半：latencyHint 数字 0（第一轮实测省 8 ms）与 Chrome 启动参数 --audio-buffer-size=128（本轮实测省 21–27 ms）。",
+      "想再往下（20 ms 以内）必须离开浏览器：桌面原生宿主 guitarbook_effects_host 用 64/128 帧块直接读写声卡。"
+    ]
+  },
+  "round3": {
+    "generatedAt": "2026-11-03T19:20:00+08:00",
+    "note": "第三轮：网页端改用 MediaStreamTrackProcessor 低延迟插入式流采集，与 MediaStreamAudioSourceNode 兼容路径在真实 Scarlett 硬件环回上做同实例交替 A/B。",
+    "method": {
+      "script": "tool/check_web_latency_mstp.mjs（--runs=N --latencyHint=0 [--chromeFlag=--audio-buffer-size=128]）",
+      "probe": "tool/web_latency_probe.html（mode=mstp：采集帧经 port.postMessage 送入 latency-detector worklet）+ tool/latency_probe_worklet.js",
+      "metric": "app 侧往返：worklet 播放脉冲 → 采集侧检测到脉冲；主指标用 AudioContext 音频时钟，墙钟（performance.now ↔ ctx.currentTime 最小二乘映射）作交叉校验",
+      "samples": "每轮 16 个脉冲（丢前 3 个），13 个有效样本，16/16 检出"
+    },
+    "caveats": [
+      "同一天不同会话的绝对值差异很大（系统音频栈状态漂移），只能比较同一会话内的配对差值。",
+      "有一轮会话中系统状态在会话中途跳变（两种路径同时降到 ~21 ms），该会话的配对差值不稳定。",
+      "loopback 路径不暴露采集时间戳，因此只有 MSTP 路径能给出采集侧读数。",
+      "并行跑两组真机测量会争用同一个采集设备，出现整轮 detected=0/missed=16 的失败，必须串行测量并丢弃失败轮次。"
+    ],
+    "sessions": [
+      {
+        "session": "2026-11-03 19:05（latencyHint interactive）",
+        "latencyHint": "interactive",
+        "chromeFlags": [],
+        "loopbackMedianMs": 82.624,
+        "mstpMedianMs": 69.333,
+        "netSavingMs": 13.291
+      },
+      {
+        "session": "2026-11-03 19:11（latencyHint interactive，5 轮）",
+        "latencyHint": "interactive",
+        "chromeFlags": [],
+        "loopbackMedianMs": 77.292,
+        "mstpMedianMs": 69.333,
+        "netSavingMs": 7.959
+      },
+      {
+        "session": "2026-11-03 19:12（latencyHint 0）",
+        "latencyHint": 0,
+        "chromeFlags": [],
+        "loopbackMedianMs": 69.292,
+        "mstpMedianMs": 58.333,
+        "netSavingMs": 10.959
+      },
+      {
+        "session": "2026-11-03 19:13（latencyHint 0，状态跳变）",
+        "latencyHint": 0,
+        "chromeFlags": [],
+        "loopbackMedianMs": 66.625,
+        "mstpMedianMs": 39.333,
+        "netSavingMs": 27.292,
+        "note": "该会话第 3 轮两种路径同时降到 ~21 ms，说明系统播放路径状态会中途变化，该配对值不稳定"
+      },
+      {
+        "session": "2026-11-03 19:16（latencyHint 0，4 轮）",
+        "latencyHint": 0,
+        "chromeFlags": [],
+        "loopbackMedianMs": 70.625,
+        "mstpMedianMs": 61.334,
+        "netSavingMs": 9.291,
+        "perPairMediansMs": [
+          {
+            "loopback": 66.625,
+            "mstp": 62
+          },
+          {
+            "loopback": 74.625,
+            "mstp": 54
+          },
+          {
+            "loopback": 74.625,
+            "mstp": 63
+          },
+          {
+            "loopback": 66.625,
+            "mstp": 60.667
+          }
+        ]
+      },
+      {
+        "session": "2026-11-03 19:17（latencyHint 0 + --audio-buffer-size=128，4 轮）",
+        "latencyHint": 0,
+        "chromeFlags": [
+          "--audio-buffer-size=128"
+        ],
+        "loopbackMedianMs": 46.625,
+        "mstpMedianMs": 42.667,
+        "netSavingMs": 3.958,
+        "perPairMediansMs": [
+          {
+            "loopback": 47.958,
+            "mstp": 42
+          },
+          {
+            "loopback": 47.958,
+            "mstp": 43.667
+          },
+          {
+            "loopback": 45.292,
+            "mstp": 42
+          },
+          {
+            "loopback": 45.292,
+            "mstp": 43.333
+          }
+        ]
+      }
+    ],
+    "clockMappingResidualRmsMs": {
+      "loopback": "3.03–3.08",
+      "mstp": "3.05–3.08"
+    },
+    "mstpFrameFacts": {
+      "frameLengthFrames": 1024,
+      "sampleRateHz": 48000,
+      "channels": 2,
+      "format": "f32-planar",
+      "timestampUnit": "microseconds",
+      "timestampStepMedianUs": 21300,
+      "readLagMedianMs": "23.4–27.6"
+    },
+    "takeaways": [
+      "MediaStreamTrackProcessor 低延迟采集单独省约 8–14 ms（4 个稳定会话：7.959 / 9.291 / 10.959 / 13.291 ms；13 次配对池化：loopback 77.292 → mstp 67.667 ms，净 9.625 ms，逐次配对差 13/13 全为正、中位 9.958 ms、区间 5.29–19.29 ms），与 --audio-buffer-size=128 叠加时再省约 4 ms（47.958 → 43.333 ms）。",
+      "本机网页端最好成绩：基线 66.6–74.6 ms → latencyHint:0 + --audio-buffer-size=128 + 低延迟采集 ≈ 42.0–43.7 ms。",
+      "剩余约 42 ms 在 Pulse/ALSA 播放路径与 USB/硬件环回，网页端已无可压缩空间；要进 20 ms 以内必须用桌面原生宿主 guitarbook_effects_host。",
+      "低延迟采集只在 Chromium 系浏览器且采集采样率与上下文一致时启用，否则自动回退兼容路径（诊断面板显示 capturePath）。",
+      "latencyHint=0 时两条路径同时变快（loopback 71.958 / mstp 56.667 ms），说明该开关只作用于输出侧。"
+    ],
+    "pooledComparison": {
+      "note": "子代理与 Lead 合并的配对统计：每次运行在同一 Chrome 实例内交替跑 loopback 与 mstp，取音频时钟域中位差。",
+      "defaultConfig": {
+        "latencyHint": "interactive",
+        "chromeFlags": [],
+        "pairedRuns": 13,
+        "pulsesPerRun": 16,
+        "validSamplesPerRun": 13,
+        "loopbackMedianMs": 77.292,
+        "loopbackP25Ms": 74.63,
+        "loopbackP75Ms": 79.96,
+        "mstpMedianMs": 67.667,
+        "netSavingPooledMedianMs": 9.625,
+        "netSavingPerPairMedianMs": 9.958,
+        "netSavingPerPairRangeMs": [
+          5.29,
+          19.29
+        ],
+        "positivePairs": "13/13"
+      },
+      "latencyHintZero": {
+        "latencyHint": 0,
+        "chromeFlags": [],
+        "loopbackMedianMs": 71.958,
+        "mstpMedianMs": 56.667,
+        "netSavingMs": 15.291
+      },
+      "audioBufferSize128": {
+        "latencyHint": "interactive",
+        "chromeFlags": [
+          "--audio-buffer-size=128"
+        ],
+        "loopbackMedianMs": 47.958,
+        "mstpMedianMs": 43.333,
+        "netSavingMs": 4.625,
+        "mstpFrameFacts": "帧长同步降到 128 帧（2.67 ms），ts 步进 2700 µs，读取滞后 24.7 → ~6 ms，采集侧 S1 降到 37.9 ms"
+      },
+      "delayDecomposition": {
+        "sharedCaptureSideMs": 53.409,
+        "webaudioGraphOverheadMs": {
+          "loopback": 24,
+          "mstp": 14.6
+        },
+        "comment": "现状路径在 WebAudio 图内（AudioConverter + PrimeWithSilence + FIFO）多花约 24 ms，MSTP 路径只多花约 14.6 ms（帧交付延迟），差约 10 ms，与配对实测吻合。"
+      }
+    }
   }
 }

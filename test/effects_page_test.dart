@@ -184,6 +184,8 @@ class MobileEffects extends FakeEffects {
 
 class FakeWebEffects extends FakeEffects {
   int captureSampleRate = 48000;
+  double captureLatencyMs = 21.3;
+  String capturePath = 'MediaStreamTrackProcessor';
 
   @override
   Future<Map<String, dynamic>> send(
@@ -201,6 +203,8 @@ class FakeWebEffects extends FakeEffects {
     'latencyMs': 64.7,
     'latencyAvailable': true,
     'captureSampleRate': captureSampleRate,
+    'captureLatencyMs': captureLatencyMs,
+    'capturePath': capturePath,
     'cpuAvailable': false,
   };
 }
@@ -566,13 +570,53 @@ void main() {
     await _scrollTo(tester, find.textContaining('网页端监听缓冲由浏览器'));
     await _scrollTo(tester, find.textContaining('图内缓冲 10.7 ms'));
     expect(find.textContaining('+ 设备输出 54.0 ms = 64.7 ms'), findsOneWidget);
-    await _scrollTo(tester, find.textContaining('以上只是输出侧'));
+    await _scrollTo(tester, find.textContaining('浏览器上报采集缓冲：21.3 ms'));
+    expect(find.textContaining('浏览器可见部分合计：86.0 ms'), findsOneWidget);
+    expect(find.textContaining('采集链路：低延迟插入式流'), findsOneWidget);
     expect(find.textContaining('驱动报告'), findsNothing);
     expect(find.textContaining('报告合计'), findsNothing);
     expect(find.textContaining('报告延迟偏高'), findsNothing);
     await _scrollTo(tester, find.textContaining('继续降低延迟'));
+    expect(find.textContaining('--audio-buffer-size=128'), findsOneWidget);
+    expect(find.textContaining('guitarbook_effects_host'), findsOneWidget);
     expect(find.textContaining('PipeWire quantum'), findsOneWidget);
     expect(find.textContaining('采集 48000 Hz'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('网页端浏览器没给采集缓冲读数时说明只能靠系统侧测量', (tester) async {
+    tester.view.physicalSize = const Size(1440, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    final backend = FakeWebEffects()..captureLatencyMs = 0;
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pump();
+    await _scrollTo(tester, find.text('声卡设置与延迟诊断'));
+    await tester.tap(find.text('声卡设置与延迟诊断'));
+    await tester.pumpAndSettle();
+    await _scrollTo(tester, find.textContaining('浏览器只提供输出侧读数'));
+    expect(find.textContaining('浏览器只提供输出侧读数'), findsOneWidget);
+    expect(find.textContaining('浏览器上报采集缓冲'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('网页端采集链路回退到兼容路径时说明原因', (tester) async {
+    tester.view.physicalSize = const Size(1440, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeWebEffects()
+      ..capturePath = 'MediaStreamAudioSourceNode';
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pump();
+    await _scrollTo(tester, find.text('声卡设置与延迟诊断'));
+    await tester.tap(find.text('声卡设置与延迟诊断'));
+    await tester.pumpAndSettle();
+    await _scrollTo(tester, find.textContaining('采集链路：兼容路径'));
+    expect(find.textContaining('采集链路：兼容路径'), findsOneWidget);
+    expect(find.textContaining('采集链路：低延迟插入式流'), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

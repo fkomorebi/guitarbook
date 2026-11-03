@@ -111,9 +111,11 @@
     });
   }
 
-  function createDetector (ctx) {
+  function createDetector (ctx, options) {
+    const opts = options || {};
     return new AudioWorkletNode(ctx, 'latency-detector', {
-      numberOfInputs: 1,
+      // 默认 1 路输入（原路径）；MSTP 路径传 0，detector 不连线也能工作。
+      numberOfInputs: opts.numberOfInputs === undefined ? 1 : opts.numberOfInputs,
       numberOfOutputs: 1,
       outputChannelCount: [1],
       channelCount: 1,
@@ -160,6 +162,269 @@
   }
 
   // ---------------------------------------------------------------------------
+  // wall-clock ↔ 音频时钟映射
+  // ---------------------------------------------------------------------------
+  // 为什么需要：MSTP 路径手里只有 wall-clock（performance.now() 与
+  // AudioData.timestamp），原路径用的是 AudioContext.currentTime（渲染/音频时钟），
+  // 两者不同域。要把两条路径放在同一根轴上比较，必须先建立一条线性映射。
+  //
+  // 映射定义：audio_ms = slope * wall_ms + intercept
+  //   - slope 应约等于 1（音频时钟与墙钟同速），偏离即表示时钟漂移；
+  //   - intercept 是两个时钟原点的差。
+  //
+  // 采样方式：测量窗口内每 10 ms 取一对 (performance.now(), ctx.currentTime)。
+  // ctx.currentTime 只在 render quantum 边界前进（48 kHz 下 2.667 ms 一跳），
+  // 所以单点残差必然带 ±1 个 quantum 的量化噪声；用最小二乘拟合整段曲线，
+  // 并把拟合残差（rms / max）作为误差上界报告。
+  //
+  // 相位校正：ctx.currentTime 在读取时刻的值对应的是「最近一个已渲染的 quantum
+  // 起点」，因此真实残差应落在 (-slope * quantumMs, 0] 区间内；取残差上界
+  // （最接近 0 的那个）加回截距，可消掉平均相位滞后带来的偏差。
+  const CLOCK_SAMPLE_INTERVAL_MS = 10;
+  const CLOCK_MAX_SAMPLES = 4000;
+
+  function startClockSampler (ctx) {
+    const samples = [];
+    const timer = setInterval(() => {
+      if (samples.length >= CLOCK_MAX_SAMPLES) return;
+      samples.push({ w: performance.now(), a: ctx.currentTime * 1000 });
+    }, CLOCK_SAMPLE_INTERVAL_MS);
+    return {
+      samples,
+      stop () { try { clearInterval(timer); } catch (e) {} }
+    };
+  }
+
+  function statsOf (values) {
+    const clean = (values || []).filter(v => typeof v === 'number' && isFinite(v));
+    if (!clean.length) return null;
+    const sorted = clean.slice().sort((a, b) => a - b);
+    const mean = clean.reduce((s, v) => s + v, 0) / clean.length;
+    const rms = Math.sqrt(clean.reduce((s, v) => s + v * v, 0) / clean.length);
+    return {
+      n: clean.length,
+      mean: round3(mean),
+      rms: round3(rms),
+      min: round3(sorted[0]),
+      max: round3(sorted[sorted.length - 1]),
+      median: round3(sorted[Math.floor((sorted.length - 1) / 2)])
+    };
+  }
+
+  function round3 (v) {
+    return (typeof v === 'number' && isFinite(v)) ? Math.round(v * 1000) / 1000 : null;
+  }
+
+  function fitClockMapping (samples, sampleRate) {
+    const clean = (samples || []).filter(s => s && isFinite(s.w) && isFinite(s.a));
+    const out = { ok: false, samples: clean.length, sampleRate: sampleRate || null };
+    if (clean.length < 8) { out.reason = '样本不足（<8）'; return out; }
+
+    function lsq (points) {
+      const n = points.length;
+      const meanW = points.reduce((s, x) => s + x.w, 0) / n;
+      const meanA = points.reduce((s, x) => s + x.a, 0) / n;
+      let sxx = 0;
+      let sxy = 0;
+      for (const s of points) {
+        const dw = s.w - meanW;
+        sxx += dw * dw;
+        sxy += dw * (s.a - meanA);
+      }
+      if (!(sxx > 0)) return null;
+      const slope = sxy / sxx;
+      return { slope, intercept: meanA - slope * meanW };
+    }
+
+    const first = lsq(clean);
+    if (!first) { out.reason = '采样退化'; return out; }
+
+    // 渲染线程可能停顿或突进（headless/无真实输出设备时尤其明显），
+    // 会把 currentTime 与 performance.now() 的关系整段带偏。
+    // 用第一次拟合的残差 + MAD 剔掉离群点后再重拟合一次。
+    const firstResiduals = clean.map(s => s.a - (first.slope * s.w + first.intercept));
+    const sortedAbs = firstResiduals.map(r => Math.abs(r)).sort((x, y) => x - y);
+    const mad = sortedAbs.length ? sortedAbs[Math.floor(sortedAbs.length / 2)] : 0;
+    const quantumMs = sampleRate ? (128 / sampleRate) * 1000 : 2.667;
+    const tolerance = Math.max(3 * 1.4826 * mad, 4 * quantumMs, 2);
+    const inliers = [];
+    let outliers = 0;
+    clean.forEach((s, i) => {
+      if (Math.abs(firstResiduals[i]) <= tolerance) inliers.push(s); else outliers++;
+    });
+    const useInliers = inliers.length >= 8;
+    const fit = (useInliers ? lsq(inliers) : null) || first;
+    const used = useInliers ? inliers : clean;
+    const n = used.length;
+    const slope = fit.slope;
+    const intercept = fit.intercept;
+    const residuals = used.map(s => s.a - (slope * s.w + intercept));
+    const abs = residuals.map(r => Math.abs(r));
+    const maxSigned = Math.max.apply(null, residuals);
+    const minSigned = Math.min.apply(null, residuals);
+    out.ok = true;
+    out.slope = slope;
+    out.intercept = intercept;
+    out.usedSamples = n;
+    out.outliers = outliers;
+    out.toleranceMs = round3(tolerance);
+    out.firstFit = { slope: first.slope, intercept: first.intercept };
+    // 相位校正后的截距（残差上界接近 0）
+    out.correctedIntercept = intercept + maxSigned;
+    out.correctedDeltaMs = maxSigned;
+    out.quantumMs = quantumMs;
+    out.residualMs = {
+      rms: round3(Math.sqrt(residuals.reduce((s, r) => s + r * r, 0) / n)),
+      mean: round3(residuals.reduce((s, r) => s + r, 0) / n),
+      maxAbs: round3(Math.max.apply(null, abs)),
+      minSigned: round3(minSigned),
+      maxSigned: round3(maxSigned),
+      // 残差理论区间：(-slope*quantumMs, 0]
+      theoreticalRangeMs: quantumMs ? [round3(-slope * quantumMs), 0] : null
+    };
+    return out;
+  }
+
+  function audioToWall (mapping, audioSeconds) {
+    if (!mapping || !mapping.ok || typeof audioSeconds !== 'number') return null;
+    return (audioSeconds * 1000 - mapping.intercept) / mapping.slope;
+  }
+
+  // ---------------------------------------------------------------------------
+  // MSTP 采集：MediaStreamTrackProcessor → readable → copyTo → port 喂给 detector
+  // ---------------------------------------------------------------------------
+  // 与原路径的区别：不再 createMediaStreamSource（绕开 MediaStreamAudioSourceNode
+  // 内部的 AudioConverter + PrimeWithSilence + FIFO），而是直接从 WebRTC 源取帧。
+  const MSTP_KEEP_FRAME_SAMPLES = 40;
+
+  function normalizeFrameTimestamp (ts, readWall) {
+    // 实测 Chrome 156 的 AudioData.timestamp 单位是「微秒」（WebCodecs 规范文本
+    // 写的是 DOMHighResTimeStamp/ms），这里按与 performance.now() 的接近程度
+    // 自适应判定，并记录实际采用的单位。
+    if (typeof ts !== 'number' || !isFinite(ts)) return { ms: null, unit: null };
+    const asMicro = ts / 1000;
+    if (Math.abs(asMicro - readWall) < 2000) return { ms: asMicro, unit: 'microseconds' };
+    if (Math.abs(ts - readWall) < 2000) return { ms: ts, unit: 'milliseconds' };
+    return { ms: null, unit: 'unknown' };
+  }
+
+  async function startMstpCapture (ctx, detector, stream, result) {
+    const info = {
+      supported: typeof MediaStreamTrackProcessor,
+      audioDataSupported: typeof AudioData,
+      errors: [],
+      frameCount: 0,
+      frames: [],
+      stats: null,
+      stopped: false
+    };
+    if (typeof MediaStreamTrackProcessor !== 'function') {
+      info.errors.push('MediaStreamTrackProcessor 不可用（浏览器不支持 Insertable Streams 音频路径）');
+      result.mstp = info;
+      return info;
+    }
+    const track = stream.getAudioTracks()[0];
+    info.trackKind = track ? track.kind : null;
+    let processor = null;
+    try {
+      processor = new MediaStreamTrackProcessor({ track: track });
+    } catch (e) {
+      info.errors.push('new MediaStreamTrackProcessor: ' + String(e));
+      result.mstp = info;
+      return info;
+    }
+    let reader = null;
+    try {
+      reader = processor.readable.getReader();
+    } catch (e) {
+      info.errors.push('getReader: ' + String(e));
+      result.mstp = info;
+      return info;
+    }
+    info.readable = !!processor.readable;
+
+    const state = { stop: false, seq: 0 };
+    let resolveDone = null;
+    info.done = new Promise(resolve => { resolveDone = resolve; });
+    info.stop = async () => {
+      state.stop = true;
+      try { await reader.cancel(); } catch (e) {}
+      try { await info.done; } catch (e) {}
+    };
+
+    (async () => {
+      const tsDeltas = [];
+      const readDeltas = [];
+      const lags = [];
+      const frameInfos = [];
+      let prevTs = null;
+      let prevRead = null;
+      while (!state.stop) {
+        let res = null;
+        try { res = await reader.read(); } catch (e) { info.errors.push('read: ' + String(e)); break; }
+        if (res.done) break;
+        const frame = res.value;
+        const readWall = performance.now();
+        try {
+          const n = frame.numberOfFrames;
+          const buf = new Float32Array(n);
+          const bytes = frame.copyTo(buf, { planeIndex: 0 });
+          const ts = frame.timestamp;
+          const norm = normalizeFrameTimestamp(ts, readWall);
+          const seq = state.seq++;
+          info.frameCount++;
+          if (prevTs !== null && typeof ts === 'number') tsDeltas.push(ts - prevTs);
+          if (prevRead !== null) readDeltas.push(readWall - prevRead);
+          if (norm.ms !== null) lags.push(readWall - norm.ms);
+          prevTs = typeof ts === 'number' ? ts : prevTs;
+          prevRead = readWall;
+          if (frameInfos.length < MSTP_KEEP_FRAME_SAMPLES) {
+            frameInfos.push({
+              seq,
+              numberOfFrames: n,
+              numberOfChannels: frame.numberOfChannels,
+              format: frame.format,
+              sampleRate: frame.sampleRate,
+              timestamp: ts,
+              timestampMs: norm.ms,
+              timestampUnit: norm.unit,
+              readWall: round3(readWall),
+              lagMs: norm.ms === null ? null : round3(readWall - norm.ms),
+              copiedBytes: bytes
+            });
+          }
+          detector.port.postMessage({
+            type: 'frame',
+            buffer: buf.buffer,
+            frames: n,
+            sampleRate: frame.sampleRate,
+            tsUs: typeof ts === 'number' ? ts : null,
+            tsMs: norm.ms,
+            readWall,
+            seq
+          }, [buf.buffer]);
+        } catch (e) {
+          info.errors.push('frame: ' + String(e));
+        } finally {
+          try { frame.close(); } catch (e) {}
+        }
+      }
+      info.frames = frameInfos;
+      info.stats = {
+        frames: info.frameCount,
+        timestampDeltaStats: statsOf(tsDeltas),
+        readWallDeltaStats: statsOf(readDeltas),
+        readMinusTimestampStats: statsOf(lags)
+      };
+      info.stopped = true;
+      if (resolveDone) resolveDone();
+    })();
+
+    result.mstp = info;
+    return info;
+  }
+
+  // ---------------------------------------------------------------------------
   // 一次完整测量
   // ---------------------------------------------------------------------------
   let busy = false;
@@ -175,7 +440,10 @@
       requested: {
         latencyHint: config && config.latencyHint !== undefined ? config.latencyHint : 'default',
         sampleRate: (config && config.sampleRate) || 48000,
-        gumExtra: (config && config.gumExtra) || {}
+        gumExtra: (config && config.gumExtra) || {},
+        // 默认 false：找不到 monitor 设备就报错（保持既有行为）。
+        // 只有 harness 的假设备冒烟测试会显式打开。
+        allowFallbackDevice: !!(config && config.allowFallbackDevice)
       },
       requestedGum: null,
       actualGum: null,
@@ -194,6 +462,8 @@
     let fakeStream = null;
     let detector = null;
     let player = null;
+    let clockSampler = null;
+    let mstpInfo = null;
 
     const nodes = [];
     const track = node => { nodes.push(node); return node; };
@@ -237,11 +507,22 @@
         }
       } catch (e) { result.errors.push('getOutputTimestamp: ' + String(e)); }
 
+      // wall-clock ↔ 音频时钟映射采样：两条路径统一口径的前提。
+      // 每 10 ms 取一对 (performance.now(), ctx.currentTime)，测量结束后最小二乘拟合。
+      const clockSampler = startClockSampler(ctx);
+      // 只在结果里留 1/10 的采样（避免 JSON 过大），拟合仍用完整数组。
+      result.wallClock = {
+        enabled: true,
+        samples: clockSampler.samples.filter((_, i) => i % 10 === 0),
+        samplesTotal: clockSampler.samples.length
+      };
+
       // 找到环回源（sink monitor）。第一次 getUserMedia 用于拿权限和 label。
       if (result.mode !== 'ingraph') {
         result.devices = await enumerateAudioInputs();
         let monitor = result.devices.find(d => /monitor/i.test(d.label || '') && /focusrite|scarlett|line1/i.test(d.label || ''));
         if (!monitor) monitor = result.devices.find(d => /monitor/i.test(d.label || ''));
+        if (!monitor && result.requested.allowFallbackDevice) monitor = result.devices[0] || null;
         if (!monitor) throw new Error('没有找到 monitor 环回输入设备；已枚举：' + JSON.stringify(result.devices));
         result.monitor = { label: monitor.label, deviceId: monitor.deviceId };
 
@@ -267,15 +548,28 @@
         monitorStream = await navigator.mediaDevices.getUserMedia({ audio: gumAudio });
         result.actualGum = collectTrackInfo(monitorStream);
 
-        // 测量链：monitor 采集 → detector（静音输出）→ 0 增益 → destination
-        const monitorSource = track(ctx.createMediaStreamSource(monitorStream));
-        detector = track(createDetector(ctx));
-        const silent = track(ctx.createGain());
-        silent.gain.value = 0;
-        monitorSource.connect(detector);
-        detector.connect(silent);
-        silent.connect(ctx.destination);
-        log('detector wired (loopback)');
+        if (result.mode === 'mstp') {
+          // MSTP 路径：完全绕开 MediaStreamAudioSourceNode。
+          // detector 不接任何输入节点，只靠 port 收主线程从 MediaStreamTrackProcessor
+          // 读到的帧；仍然接到 destination 上，保证音频图会拉动这个 worklet。
+          detector = track(createDetector(ctx, { numberOfInputs: 0 }));
+          const silent = track(ctx.createGain());
+          silent.gain.value = 0;
+          detector.connect(silent);
+          silent.connect(ctx.destination);
+          mstpInfo = await startMstpCapture(ctx, detector, monitorStream, result);
+          log('detector wired (mstp, no input node), frames=' + (mstpInfo ? mstpInfo.frameCount : 'n/a'));
+        } else {
+          // 测量链：monitor 采集 → detector（静音输出）→ 0 增益 → destination
+          const monitorSource = track(ctx.createMediaStreamSource(monitorStream));
+          detector = track(createDetector(ctx));
+          const silent = track(ctx.createGain());
+          silent.gain.value = 0;
+          monitorSource.connect(detector);
+          detector.connect(silent);
+          silent.connect(ctx.destination);
+          log('detector wired (loopback)');
+        }
       } else {
         // 对照组：输入走假设备，只测图内延迟。
         result.devices = await enumerateAudioInputs();
@@ -331,10 +625,23 @@
         const data = event.data || {};
         if (data.type === 'detection' || data.type === 'missed') {
           detections.push(data);
-          if (data.type === 'detection') result.measurementsMs.push(data.deltaMs);
+          if (data.type === 'detection' && typeof data.deltaMs === 'number') {
+            result.measurementsMs.push(data.deltaMs);
+          }
         }
       };
-      detector.port.postMessage({ type: 'arm', pulses: expected });
+      const armMessage = { type: 'arm', pulses: expected };
+      if (result.mode === 'mstp') {
+        // 帧喂入模式：worklet 用 (tsMs + audioOffsetMs) 把帧的墙钟时间戳换算成
+        // 音频时钟数量级，做 ±50 ms 的宽松门限。这里用此刻的映射截距当 offset。
+        const provisional = fitClockMapping(clockSampler.samples, ctx.sampleRate);
+        armMessage.mode = 'frame';
+        armMessage.audioOffsetMs = provisional.ok
+          ? provisional.intercept
+          : (ctx.currentTime * 1000 - performance.now());
+        result.wallClock.provisionalMapping = provisional;
+      }
+      detector.port.postMessage(armMessage);
       log('armed ' + expected.length + ' pulses, t0=' + t0.toFixed(4));
       log('requested: ' + JSON.stringify(result.requested) + ' reported: ' + JSON.stringify(result.context));
 
@@ -358,9 +665,87 @@
 
       const usable = detections.filter(d => d.type === 'detection' && d.index >= WARMUP_PULSES);
       result.measurementsMs = usable.map(d => d.deltaMs);
+      result.measurementsDomain = 'audio-clock';
+      // 音频时钟口径的主指标（两条路径同域、可直接比较）
+      result.wallClock.measurementsMsAudioClock = result.measurementsMs.slice();
       result.warmupPulsesDropped = WARMUP_PULSES;
       result.detected = detections.filter(d => d.type === 'detection').length;
       result.missed = detections.filter(d => d.type === 'missed').length;
+
+      // -------------------------------------------------------------------------
+      // 统一到 wall-clock 口径
+      // -------------------------------------------------------------------------
+      // 两条路径的「到达时刻」来源不同：
+      //   - loopback：detector worklet 用 ctx.currentTime 记的音频时钟时刻
+      //               （含 MediaStreamAudioSourceNode 的 FIFO / prime 延迟）；
+      //   - mstp    ：帧的墙钟时间戳（物理采集时刻）+ worklet 收到帧的音频时钟估计。
+      // 统一做法：拟合 audioMs = slope * wallMs + intercept，
+      // 把 audio-clock 的时刻换算到 wall-clock，再相减得到每脉冲延迟。
+      const mapping = fitClockMapping(clockSampler.samples, ctx.sampleRate);
+      result.wallClock.mapping = mapping;
+      result.wallClock.measurementsMs = [];
+      result.wallClock.measurementsMsQuantum = [];
+      result.wallClock.captureMeasurementsMs = [];
+      result.wallClock.perPulse = [];
+      if (mapping.ok) {
+        for (const d of usable) {
+          const expectedWall = audioToWall(mapping, d.expected);
+          if (expectedWall === null) continue;
+          const entry = { index: d.index, expectedWall: round3(expectedWall) };
+          if (d.mode === 'frame') {
+            // 帧喂入：app 可见时刻 = worklet 收到帧的时刻（换算到墙钟）；
+            // 采集时刻 = 帧时间戳 + 帧内偏移（S1），S2 再减掉一帧时长。
+            const arrivalWall = audioToWall(mapping, d.frameArrivalAudio);
+            const captureWall = typeof d.frameTimestampMs === 'number' && d.frameSampleRate
+              ? d.frameTimestampMs + (d.crossingIndex / d.frameSampleRate) * 1000
+              : null;
+            const frameDurMs = d.frameSampleRate ? (d.frameFrames / d.frameSampleRate) * 1000 : null;
+            entry.arrivalWall = arrivalWall === null ? null : round3(arrivalWall);
+            entry.captureWall = captureWall === null ? null : round3(captureWall);
+            entry.captureWallS2 = (captureWall === null || frameDurMs === null)
+              ? null
+              : round3(captureWall - frameDurMs);
+            entry.frameDurationMs = frameDurMs === null ? null : round3(frameDurMs);
+            entry.crossingIndex = d.crossingIndex;
+            entry.frameTimestampMs = d.frameTimestampMs;
+            entry.readWall = d.readWall;
+            if (arrivalWall !== null) {
+              entry.deltaWallMs = round3(arrivalWall - expectedWall);
+              result.wallClock.measurementsMs.push(entry.deltaWallMs);
+            }
+            // 交叉校验：用「处理该帧的 render quantum 起点」重算一遍到达时刻。
+            // 该值没有 performance.now() 估算误差，但分辨率是 1 个 quantum
+            // （2.667 ms @48 kHz），且一定不晚于真实到达时刻。
+            if (typeof d.quantumStartAudio === 'number') {
+              const qWall = audioToWall(mapping, d.quantumStartAudio);
+              entry.quantumStartWall = qWall === null ? null : round3(qWall);
+              entry.deltaWallMsQuantum = qWall === null ? null : round3(qWall - expectedWall);
+              if (qWall !== null) result.wallClock.measurementsMsQuantum.push(entry.deltaWallMsQuantum);
+            }
+            if (captureWall !== null) {
+              entry.captureDeltaWallMs = round3(captureWall - expectedWall);
+              entry.captureDeltaS2WallMs = frameDurMs === null ? null : round3(captureWall - frameDurMs - expectedWall);
+              // 换算回音频时钟口径，方便与 loopback 的 deltaMs 直接对照
+              entry.captureDeltaAudioMs = round3(mapping.slope * (captureWall - expectedWall));
+              result.wallClock.captureMeasurementsMs.push(entry.captureDeltaWallMs);
+            }
+          } else if (typeof d.arrival === 'number') {
+            const arrivalWall = audioToWall(mapping, d.arrival);
+            if (arrivalWall === null) continue;
+            entry.arrivalWall = round3(arrivalWall);
+            entry.deltaWallMs = round3(arrivalWall - expectedWall);
+            result.wallClock.measurementsMs.push(entry.deltaWallMs);
+          }
+          result.wallClock.perPulse.push(entry);
+        }
+      }
+      if (result.mode === 'mstp') {
+        // MSTP 路径的「到达时刻」由 worklet 用自己的音频时钟估计（frameArrivalAudio），
+        // 与 loopback 的 arrival 属于同一个 AudioContext 时钟域，可以直接相减，
+        // 因此主指标 measurementsMs 保持音频时钟口径；wall-clock 版本只作交叉校验。
+        result.wallClock.measurementsMsAudioClock = result.measurementsMs.slice();
+        result.wallClock.appSideSource = 'worklet 音频时钟估计（frameArrivalAudio）';
+      }
 
       if (result.measurementsMs.length === 0) {
         result.errors.push('没有检测到任何环回脉冲：' + JSON.stringify(result.pulses));
@@ -369,6 +754,8 @@
       result.errors.push(String(error && error.stack ? error.stack : error));
       log('ERROR ' + String(error));
     } finally {
+      try { if (clockSampler) clockSampler.stop(); } catch (e) {}
+      try { if (mstpInfo && mstpInfo.stop) await mstpInfo.stop(); } catch (e) {}
       try { if (player) { player.stop(); player.disconnect(); } } catch (e) {}
       for (const node of nodes) { try { node.disconnect(); } catch (e) {} }
       try { if (monitorStream) monitorStream.getTracks().forEach(t => t.stop()); } catch (e) {}

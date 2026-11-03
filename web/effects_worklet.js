@@ -18,6 +18,11 @@
  *   {type:'parameter', index:int, parameter:int, value:double}
  *   {type:'gain',      value:double}          // 输出音量 0..1
  *   {type:'reset'}                           // 清空整条链并复位状态
+ *   {type:'input',     buffer:ArrayBuffer, frames:int}
+ *       // 主线程注入的采集帧：buffer 为单声道 Float32 的原始字节（byteOffset 0），
+ *       // frames 为采样数，追加到端口输入 FIFO，供 inputMode:'port' 消费。
+ *   {type:'inputMode', mode:'port'|'node'}
+ *       // 'port' = 优先消费 FIFO（欠载补零）；'node' = 走音频节点输入（默认，行为不变）。
  *
  * worklet → 主线程 消息协议：
  *   {type:'meter', input:double, output:double}   // 每 ~100 ms 最多一次
@@ -798,6 +803,10 @@
             this.frameCounter = 0;
             this.leftBuffer = new Float32Array(0);
             this.rightBuffer = new Float32Array(0);
+            // 端口注入输入通道：inputMode 默认 'node'，保持原有音频节点输入行为。
+            this.inputMode = 'node';
+            this.portFifo = new Float32Array(0);
+            this.portFifoLength = 0;
             this.port.onmessage = event => this.handleMessage(event.data);
         }
 
@@ -840,13 +849,66 @@
                         this.chain.reset();
                         this.inputPeak = 0;
                         this.outputPeak = 0;
+                        // 复位也清空端口输入 FIFO；inputMode 属于通道配置，不随 reset 改变。
+                        this.portFifoLength = 0;
                         break;
+                    case 'input': {
+                        const buffer = message.buffer;
+                        const frames = message.frames;
+                        if (!(buffer instanceof ArrayBuffer))
+                            throw new Error('input 消息缺少 ArrayBuffer。');
+                        if (!Number.isInteger(frames) || frames < 0)
+                            throw new Error('无效的采集帧数。');
+                        if (frames * Float32Array.BYTES_PER_ELEMENT > buffer.byteLength)
+                            throw new Error('采集帧数据不足。');
+                        this.appendPortFrames(new Float32Array(buffer, 0, frames));
+                        break;
+                    }
+                    case 'inputMode': {
+                        const mode = message.mode;
+                        if (mode !== 'port' && mode !== 'node')
+                            throw new Error('无效的输入模式。');
+                        this.inputMode = mode;
+                        break;
+                    }
                     default:
                         this.reportError('未知指令：' + String(message.type));
                         break;
                 }
             } catch (error) {
                 this.reportError(error && error.message ? error.message : String(error));
+            }
+        }
+
+        /** 把主线程注入的单声道采集帧追加到端口输入 FIFO。 */
+        appendPortFrames (samples) {
+            const pending = this.portFifoLength;
+            const needed = pending + samples.length;
+            if (needed > this.portFifo.length) {
+                let capacity = Math.max(128, this.portFifo.length);
+                while (capacity < needed)
+                    capacity *= 2;
+                const grown = new Float32Array(capacity);
+                grown.set(this.portFifo.subarray(0, pending));
+                this.portFifo = grown;
+            }
+            this.portFifo.set(samples, pending);
+            this.portFifoLength = needed;
+        }
+
+        /**
+         * 从端口输入 FIFO 取 frames 个样本填到 target；不足时补零（欠载），
+         * 并把剩余样本前移保留给下一个量子。
+         */
+        readPortFrames (target, frames) {
+            const available = Math.min(frames, this.portFifoLength);
+            if (available > 0)
+                target.set(this.portFifo.subarray(0, available));
+            if (available < frames)
+                target.fill(0, available);
+            if (available > 0) {
+                this.portFifo.copyWithin(0, available, this.portFifoLength);
+                this.portFifoLength -= available;
             }
         }
 
@@ -863,7 +925,11 @@
             const right = this.rightBuffer;
             const input = inputs && inputs.length ? inputs[0] : null;
 
-            if (input && input.length >= 2) {
+            if (this.inputMode === 'port') {
+                // 端口注入模式：优先消费主线程采集帧，欠载补零；忽略音频节点输入。
+                this.readPortFrames(left, frames);
+                right.set(left.subarray(0, frames));
+            } else if (input && input.length >= 2) {
                 left.set(input[0].subarray(0, frames));
                 right.set(input[1].subarray(0, frames));
             } else if (input && input.length >= 1) {

@@ -4,6 +4,8 @@ import 'dart:js_interop_unsafe';
 
 import 'package:web/web.dart' as web;
 
+import 'effects_capture_mstp_web.dart';
+
 /// 电脑端浏览器的实时效果器后端。
 ///
 /// 音频链路（Web Audio API + AudioWorklet）：
@@ -33,6 +35,10 @@ class EffectsBackend {
   static const String _processorName = 'guitarbook-effects';
 
   static const String _backendName = 'Web Audio (AudioWorklet)';
+
+  /// 采集链路名称（写入 `status` 的 `capturePath`）。
+  static const String _capturePathMstp = 'MediaStreamTrackProcessor';
+  static const String _capturePathSourceNode = 'MediaStreamAudioSourceNode';
 
   static const String _gestureNotice =
       '浏览器要求用户手势：请再点击一次「开始监听」。';
@@ -65,6 +71,15 @@ class EffectsBackend {
   /// 采集轨道的实际设置：用于判断浏览器采集侧是否发生了重采样。
   int? _captureSampleRate;
   int? _captureChannels;
+
+  /// 浏览器上报的采集缓冲（秒→毫秒）：只含设备采集侧，不含浏览器内部队列。
+  double? _captureLatencyMs;
+
+  /// 当前采集链路：`MediaStreamTrackProcessor`（低延迟）或 `MediaStreamAudioSourceNode`。
+  String _capturePath = 'none';
+
+  /// 低延迟采集实例；为空表示当前走的是 source node 路径。
+  MstpCapture? _mstp;
 
   /// 网页端不是移动端适配层。
   bool get mobile => false;
@@ -211,6 +226,11 @@ class EffectsBackend {
 
   /// 停止监听：断开节点、停掉轨道、关闭上下文，但保留效果链内容。
   Future<Map<String, dynamic>> _stop() async {
+    final capture = _mstp;
+    _mstp = null;
+    if (capture != null) {
+      await capture.stop();
+    }
     final node = _node;
     _node = null;
     if (node != null) {
@@ -256,6 +276,8 @@ class EffectsBackend {
     _outputPeak = 0;
     _captureSampleRate = null;
     _captureChannels = null;
+    _captureLatencyMs = null;
+    _capturePath = 'none';
     return _status();
   }
 
@@ -289,11 +311,14 @@ class EffectsBackend {
   }
 
   /// 申请麦克风并搭好 `麦克风 → worklet → 扬声器` 的链路。
+  ///
+  /// 采集侧优先走 `MediaStreamTrackProcessor`（低延迟插入式流），它比
+  /// `MediaStreamAudioSourceNode` 少一段浏览器内部缓冲；不支持或出问题时
+  /// 自动回退到 source node。
   Future<void> _openInput(web.AudioContext context) async {
     if (_node != null) return;
     final stream = await _requestMicrophone(context);
     _readCaptureSettings(stream);
-    final source = context.createMediaStreamSource(stream);
     final node = web.AudioWorkletNode(
       context,
       _processorName,
@@ -305,14 +330,116 @@ class EffectsBackend {
         channelCountMode: 'explicit',
       ),
     );
-    source.connect(node);
-    node.connect(context.destination);
     node.port.onmessage = _onWorkletMessage.toJS;
+    node.connect(context.destination);
     _stream = stream;
-    _source = source;
     _node = node;
     final label = _trackLabel(stream);
     if (label != null) _inputDevice = label;
+
+    if (await _tryMstpCapture(context, stream, node)) return;
+    _connectSourceNode(context, stream, node);
+  }
+
+  /// 连接兼容路径：`MediaStreamAudioSourceNode` → worklet。
+  void _connectSourceNode(
+    web.AudioContext context,
+    web.MediaStream stream,
+    web.AudioWorkletNode node,
+  ) {
+    try {
+      final source = context.createMediaStreamSource(stream);
+      source.connect(node);
+      _source = source;
+      _capturePath = _capturePathSourceNode;
+    } catch (error) {
+      _workletError = '无法连接麦克风输入：$error';
+    }
+  }
+
+  /// 尝试改用 `MediaStreamTrackProcessor` 采集帧。
+  ///
+  /// 成功时 worklet 从端口取采集帧（`_inputMode` = `port`），失败时调用方
+  /// 回退到 source node 路径（`_inputMode` = `node`）。
+  Future<bool> _tryMstpCapture(
+    web.AudioContext context,
+    web.MediaStream stream,
+    web.AudioWorkletNode node,
+  ) async {
+    if (!MstpCapture.isSupported) return false;
+    // 采集采样率必须与上下文一致：worklet 里的 DSP 按上下文速率跑，
+    // 不一致时不能直接喂原始帧。
+    final contextRate = context.sampleRate.round();
+    if (_captureSampleRate != null && _captureSampleRate != contextRate) {
+      return false;
+    }
+    final capture = await MstpCapture.start(
+      stream: stream,
+      onFrame: (buffer, frames, sampleRate) =>
+          _postCapturedFrames(node, buffer, frames, sampleRate),
+      onError: (error) => _fallbackToSourceNode(context, stream, node, error),
+    );
+    if (capture == null) return false;
+    _mstp = capture;
+    _postInputMode(node, 'port');
+    try {
+      await capture.firstFrame.timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // 没有按时收到帧：回退到 source node 路径。
+      await capture.stop();
+      if (identical(_mstp, capture)) _mstp = null;
+      if (_capturePath == _capturePathSourceNode) {
+        // 读流出错时 [onError] 已经回退并连好了兼容路径，不要重复连接。
+        return true;
+      }
+      // 切回音频节点输入模式，否则 worklet 会继续等端口里的样本而静音。
+      _postInputMode(node, 'node');
+      return false;
+    }
+    _capturePath = _capturePathMstp;
+    return true;
+  }
+
+  /// 低延迟采集中途失败：切回 source node 路径，保证不会静音。
+  void _fallbackToSourceNode(
+    web.AudioContext context,
+    web.MediaStream stream,
+    web.AudioWorkletNode node,
+    Object error,
+  ) {
+    if (_capturePath == _capturePathSourceNode) return;
+    final capture = _mstp;
+    _mstp = null;
+    if (capture != null) {
+      unawaited(capture.stop());
+    }
+    _postInputMode(node, 'node');
+    _connectSourceNode(context, stream, node);
+    _workletError ??= '低延迟采集不可用，已切回兼容路径：$error';
+  }
+
+  /// 把一帧采集样本送进 worklet 的端口输入队列。
+  void _postCapturedFrames(
+    web.AudioWorkletNode node,
+    JSArrayBuffer buffer,
+    int frames,
+    int sampleRate,
+  ) {
+    if (frames <= 0) return;
+    final message = JSObject();
+    message.setProperty('type'.toJS, 'input'.toJS);
+    message.setProperty('buffer'.toJS, buffer);
+    message.setProperty('frames'.toJS, frames.toJS);
+    message.setProperty('sampleRate'.toJS, sampleRate.toJS);
+    node.port.postMessage(message);
+  }
+
+  /// 告诉 worklet 该从哪一路取输入：`port`（端口注入的采集帧）或 `node`。
+  void _postInputMode(web.AudioWorkletNode node, String mode) {
+    final message = JSObject();
+    message.setProperty('type'.toJS, 'inputMode'.toJS);
+    message.setProperty('mode'.toJS, mode.toJS);
+    node.port.postMessage(message);
   }
 
   /// 申请单声道、关闭全部采集处理的麦克风。
@@ -367,10 +494,12 @@ class EffectsBackend {
         if (settings is! Map) continue;
         final rate = settings['sampleRate'];
         final channels = settings['channelCount'];
+        final latency = settings['latency'];
         if (rate is num && rate > 0) _captureSampleRate = rate.round();
         if (channels is num && channels > 0) {
           _captureChannels = channels.round();
         }
+        if (latency is num && latency >= 0) _captureLatencyMs = latency * 1000;
         return;
       }
     } catch (_) {
@@ -632,6 +761,8 @@ class EffectsBackend {
       'baseLatencyMs': latency.baseMs,
       'captureSampleRate': _captureSampleRate,
       'captureChannels': _captureChannels,
+      'captureLatencyMs': _captureLatencyMs ?? 0.0,
+      'capturePath': _capturePath,
       'blockMs': _renderQuantum * 1000.0 / sampleRate,
       'xruns': -1,
       'cpu': 0.0,

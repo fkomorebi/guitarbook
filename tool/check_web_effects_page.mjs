@@ -128,7 +128,7 @@ try {
   // 用于制造「没有用户激活」的场景（DOM click 不算用户激活）。
   await send('Page.addScriptToEvaluateOnNewDocument', {
     source: `
-      window.__probe = { contexts: [], nodes: [], gum: [], meters: [], errors: [], workletErrors: [] };
+      window.__probe = { contexts: [], nodes: [], gum: [], gumSettings: [], meters: [], errors: [], workletErrors: [], mstpCount: 0 };
       window.__realActivation = false;
       window.addEventListener('pointerdown', () => { window.__realActivation = true; }, true);
       window.addEventListener('error', e => window.__probe.errors.push(String(e.message)));
@@ -168,10 +168,32 @@ try {
       const md = navigator.mediaDevices;
       if (md && md.getUserMedia) {
         const orig = md.getUserMedia.bind(md);
-        md.getUserMedia = (c) => {
+        md.getUserMedia = async (c) => {
           window.__probe.gum.push(JSON.stringify(c));
-          return orig(c);
+          const s = await orig(c);
+          try {
+            const t = s.getAudioTracks()[0];
+            const st = t ? t.getSettings() : null;
+            window.__probe.gumSettings.push(st ? {
+              sampleRate: st.sampleRate,
+              channelCount: st.channelCount,
+              latency: st.latency
+            } : null);
+          } catch (e) {}
+          return s;
         };
+      }
+      // 记录低延迟采集（MediaStreamTrackProcessor）是否被真正使用。
+      const OrigMSTP = window.MediaStreamTrackProcessor;
+      if (OrigMSTP) {
+        function PatchedMSTP(init) {
+          const p = new OrigMSTP(init);
+          window.__probe.mstpCount += 1;
+          return p;
+        }
+        PatchedMSTP.prototype = OrigMSTP.prototype;
+        Object.setPrototypeOf(PatchedMSTP, OrigMSTP);
+        window.MediaStreamTrackProcessor = PatchedMSTP;
       }
     `
   });
@@ -298,7 +320,10 @@ try {
       maxInput: p.meters.reduce((a, m) => Math.max(a, Number(m.input) || 0), 0),
       maxOutput: p.meters.reduce((a, m) => Math.max(a, Number(m.output) || 0), 0),
       workletErrors: p.workletErrors.slice(0, 5),
-      errors: p.errors.slice(0, 5)
+      errors: p.errors.slice(0, 5),
+      mstpCount: p.mstpCount || 0,
+      mstpSupported: typeof window.MediaStreamTrackProcessor === 'function',
+      gumSettings: p.gumSettings || []
     };
   })()`);
 
@@ -321,6 +346,20 @@ try {
     check(prefix + '：输出 = 输入 × 输出音量 50%', Math.abs(ratio - 0.5) < 1e-6, 'ratio=' + ratio);
     check(prefix + '：页面无未捕获异常', probe.errors.length === 0, JSON.stringify(probe.errors));
     check(prefix + '：worklet 未上报 error', probe.workletErrors.length === 0, JSON.stringify(probe.workletErrors));
+    if (probe.mstpSupported) {
+      // 低延迟采集只在「采集采样率 == 上下文采样率」时启用；
+      // 采样率不同必须回退兼容路径，否则播放速率会错。
+      const track = (probe.gumSettings || [])[0] || {};
+      const sameRate = !track.sampleRate || track.sampleRate === probe.sampleRate;
+      if (sameRate) {
+        check(prefix + '：使用低延迟采集（MediaStreamTrackProcessor）',
+          probe.mstpCount >= 1, 'mstpCount=' + probe.mstpCount);
+      } else {
+        check(prefix + '：采集采样率与上下文不同，已回退兼容采集路径',
+          probe.mstpCount === 0,
+          'track=' + track.sampleRate + ' ctx=' + probe.sampleRate);
+      }
+    }
   };
 
   // 导航并等待页面可交互；在受限沙箱里 Chrome 可能根本连不上 127.0.0.1，
@@ -371,6 +410,14 @@ try {
     return Array.from(out).filter(t => /驱动|音色/.test(t)).slice(0, 8);
   })()`);
   check('A：过载旋钮参数已渲染', (knobLabels || []).length >= 2, JSON.stringify(knobLabels));
+
+  // 诊断面板：确认页面写出了当前采集链路（低延迟插入式流或兼容路径）。
+  await realClick('声卡设置与延迟诊断');
+  await sleep(1500);
+  const hasMstpText = await pageHas('采集链路：低延迟插入式流')();
+  const hasFallbackText = await pageHas('采集链路：兼容路径')();
+  check('A：诊断面板显示采集链路', hasMstpText || hasFallbackText,
+    'mstp=' + hasMstpText + ' fallback=' + hasFallbackText);
 
   // ---------- 阶段 B：无用户激活进入 → 手势提示 → 真实点击「开始监听」 ----------
   console.log('\n===== 阶段 B：无用户激活进入 → 手势提示 → 点击「开始监听」 =====');

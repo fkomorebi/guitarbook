@@ -32,7 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const CHROME = '/usr/bin/google-chrome';
-const DEVTOOLS_PORT = 9444;
+let DEVTOOLS_PORT = 9444;
 const PROBE_URL = pathToFileURL(path.join(root, 'tool', 'web_latency_probe.html')).href;
 const RESULT_FILE = path.join(root, '.tools', 'latency_results.json');
 
@@ -45,6 +45,8 @@ function argValue (name, fallback) {
 }
 const RUNS = Math.max(1, Number(argValue('runs', 3)));
 const ONLY_GROUPS = String(argValue('groups', 'A,B,C,D,E')).split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+// 允许指定 DevTools 端口，避免与并行运行的其它探针抢同一个端口。
+DEVTOOLS_PORT = Number(argValue('port', DEVTOOLS_PORT));
 
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,27 @@ const GROUPS = [
     mode: 'ingraph',
     latencyHint: 'interactive',
     fakeDevice: true,
+    gumExtra: {}
+  },
+  {
+    name: 'G',
+    desc: 'latencyHint 0 + Chrome --audio-buffer-size=128（缩小音频服务缓冲）',
+    latencyHint: 0,
+    chromeFlags: ['--audio-buffer-size=128'],
+    gumExtra: {}
+  },
+  {
+    name: 'H',
+    desc: 'latencyHint 0 + Chrome --audio-buffer-size=256',
+    latencyHint: 0,
+    chromeFlags: ['--audio-buffer-size=256'],
+    gumExtra: {}
+  },
+  {
+    name: 'I',
+    desc: 'latencyHint 0 + Chrome --audio-buffer-size=64（探测音频服务缓冲下限）',
+    latencyHint: 0,
+    chromeFlags: ['--audio-buffer-size=64'],
     gumExtra: {}
   }
 ];
@@ -390,13 +413,26 @@ try {
   };
 
   if (realGroups.length) {
-    await withChrome([], async ctx => {
-      chromeVersionInfo = ctx.versionInfo;
-      for (const group of realGroups) {
-        results.groups[group.name] = await runGroup(group, [], { ...ctx, extraFlags: ['--headless=new'] });
-      }
-      return true;
-    });
+    // 按 Chrome 旗标分组：--audio-buffer-size 是进程级设置，必须每个旗标组合起一个 Chrome。
+    const byFlags = new Map();
+    for (const group of realGroups) {
+      const key = JSON.stringify(group.chromeFlags || []);
+      if (!byFlags.has(key)) byFlags.set(key, []);
+      byFlags.get(key).push(group);
+    }
+    for (const [key, groups] of byFlags) {
+      const flags = JSON.parse(key);
+      await withChrome(flags, async ctx => {
+        if (!chromeVersionInfo) chromeVersionInfo = ctx.versionInfo;
+        for (const group of groups) {
+          results.groups[group.name] = await runGroup(group, [], {
+            ...ctx,
+            extraFlags: ['--headless=new', ...flags]
+          });
+        }
+        return true;
+      });
+    }
   }
 
   if (fakeGroups.length) {
@@ -420,16 +456,22 @@ try {
 
   // -------------------------------------------------------------------------
   // 结论：把环回往返拆成「浏览器报告的输出延迟」与「采集/环回链路」。
+  // 基线组优先取 A（现状）；没有跑 A 时取第一个有数据的组，差值都相对基线算。
   // -------------------------------------------------------------------------
-  const a = results.groups.A;
-  const e = results.groups.E;
+  const groupEntries = Object.keys(results.groups)
+    .map(name => ({ name, entry: results.groups[name] }))
+    .filter(item => item.entry && item.entry.summary && item.entry.summary.runsWithData > 0);
+  const baseline = groupEntries.find(item => item.name === 'A') || groupEntries[0] || null;
   const conclusion = { available: false };
-  if (a && a.summary.runsWithData > 0) {
+  if (baseline) {
+    const a = baseline.entry;
+    const e = results.groups.E;
     const rtt = a.summary.medianOfRunMediansMs;
     const outputReported = a.summary.reportedOutputLatencyMsMedian;
     const baseReported = a.summary.reportedBaseLatencyMsMedian;
     const ingraph = e && e.summary.runsWithData > 0 ? e.summary.medianOfRunMediansMs : null;
     conclusion.available = true;
+    conclusion.baselineGroup = baseline.name;
     const inputReported = a.summary.gumLatencyMsMedian;
     conclusion.loopbackRttMedianMs = rtt;
     conclusion.reportedOutputLatencyMs = outputReported;
@@ -446,20 +488,40 @@ try {
     conclusion.quantumNote = '采集侧 track.getSettings().latency = 0.021333 s 恰为 1024 帧，与 pw-top 中 ' +
       'alsa_input.hw_Gen_0 驱动节点的 QUANT=1024 一致；残差约 5 个 quantum，分散在 sink 输出、硬件环回与采集图调度上。';
     const deltas = {};
-    for (const name of ['B', 'C', 'D']) {
+    for (const item of groupEntries) {
+      if (item.name === baseline.name) continue;
+      deltas[item.name] = round(item.entry.summary.medianOfRunMediansMs - rtt);
+    }
+    conclusion.medianDeltaVsBaseline = deltas;
+    conclusion.medianDeltaVsA = deltas;
+    // D（latencyHint: 0）相对 A（现状）省了多少：页面侧唯一有效的旋钮。
+    const aGroup = results.groups.A;
+    const dGroup = results.groups.D;
+    conclusion.pageSideSavingsMs = (aGroup && dGroup &&
+      aGroup.summary.runsWithData > 0 && dGroup.summary.runsWithData > 0)
+      ? round(aGroup.summary.medianOfRunMediansMs - dGroup.summary.medianOfRunMediansMs)
+      : null;
+    // G/H 组与 D 组同为 latencyHint 0，只差 Chrome 的 --audio-buffer-size。
+    const dMedian = dGroup && dGroup.summary.runsWithData > 0
+      ? dGroup.summary.medianOfRunMediansMs
+      : null;
+    const bufferDeltas = {};
+    for (const name of ['G', 'H']) {
       const g = results.groups[name];
-      if (g && g.summary.runsWithData > 0 && typeof rtt === 'number') {
-        deltas[name] = round(g.summary.medianOfRunMediansMs - rtt);
+      if (g && g.summary.runsWithData > 0 && typeof dMedian === 'number') {
+        bufferDeltas[name] = round(g.summary.medianOfRunMediansMs - dMedian);
       }
     }
-    conclusion.medianDeltaVsA = deltas;
-    conclusion.pageSideSavingsMs = typeof deltas.D === 'number' ? round(-deltas.D) : null;
-    const dBase = results.groups.D && results.groups.D.summary.runsWithData > 0
-      ? results.groups.D.summary.reportedBaseLatencyMsMedian : null;
+    conclusion.audioBufferSizeDeltasVsD = bufferDeltas;
+    conclusion.audioBufferSizeSavingsMs = Object.fromEntries(
+      Object.entries(bufferDeltas).map(([key, value]) => [key, round(-value)])
+    );
+    const dBase = dGroup && dGroup.summary.runsWithData > 0
+      ? dGroup.summary.reportedBaseLatencyMsMedian : null;
     conclusion.baseLatencySavingsMs = (typeof dBase === 'number' && typeof baseReported === 'number')
       ? round(baseReported - dBase)
       : null;
-    const constraints = (results.groups.A.runs.find(r => r.supportedConstraints) || {}).supportedConstraints || {};
+    const constraints = (a.runs.find(r => r.supportedConstraints) || {}).supportedConstraints || {};
     conclusion.constraintSupport = {
       sampleRate: !!constraints.sampleRate,
       latency: !!constraints.latency,
@@ -467,20 +529,30 @@ try {
       echoCancellation: !!constraints.echoCancellation
     };
     const samples = a.summary.allSamplesStats;
+    const groupLine = groupEntries
+      .map(item => `${item.name} ${item.entry.summary.medianOfRunMediansMs} ms`)
+      .join(' / ');
     conclusion.text = [
-      `A 组（现状）环回实测往返中位 ${rtt} ms、最小 ${a.summary.bestRunMinMs} ms；`,
+      `基线组 ${baseline.name} 环回实测往返中位 ${rtt} ms、最小 ${a.summary.bestRunMinMs} ms；`,
+      `各组中位：${groupLine}（差值相对 ${baseline.name}：${JSON.stringify(deltas)} ms，负数=更快）；`,
       `浏览器只报出 baseLatency ${baseReported} ms + 采集 latency ${inputReported} ms ` +
         `（Linux Chrome outputLatency 恒 0，不可用作输出缓冲依据）；`,
       typeof ingraph === 'number' ? `图内（worklet → destination）开销 ${ingraph} ms，可忽略；` : '',
       conclusion.residualBeyondReportedMs !== null
         ? `其余约 ${conclusion.residualBeyondReportedMs} ms 落在 PipeWire 图、USB 与硬件环回（约 5 × 21.33 ms quantum）；` : '',
-      `B/C 相对 A ${JSON.stringify(deltas)} ms —— getUserMedia 的 sampleRate/latency 约束被接受但无效果；`,
-      `D（latencyHint: 0）比 A 少 ${conclusion.pageSideSavingsMs} ms，页面侧唯一有效的旋钮；`,
-      `结论：DSP 链路只占 0.1 ms，页面侧最多省 ${conclusion.pageSideSavingsMs} ms，` +
-        `~${conclusion.residualBeyondReportedMs} ms 属浏览器/PipeWire/USB 输出+采集链路，需从音频栈配置降低。`
+      conclusion.pageSideSavingsMs !== null
+        ? `D（latencyHint: 0）比 A 少 ${conclusion.pageSideSavingsMs} ms，页面侧唯一有效的旋钮；`
+        : '',
+      Object.keys(bufferDeltas).length
+        ? `Chrome --audio-buffer-size（G/H）相对 D 的变化 ${JSON.stringify(bufferDeltas)} ms（负数=更快），` +
+          `采集侧上报 latency：G=${round((results.groups.G.summary || {}).gumLatencyMsMedian)} ms、` +
+          `H=${round((results.groups.H.summary || {}).gumLatencyMsMedian)} ms；`
+        : '',
+      `结论：DSP 链路只占 0.1 ms；页面侧能省的只有 latencyHint:0（${conclusion.pageSideSavingsMs} ms），` +
+        `剩下的延迟在浏览器采集/输出缓冲、PipeWire quantum 与硬件链路上，只能在系统与浏览器侧调。`
     ].join('');
   } else {
-    conclusion.reason = 'A 组没有拿到有效环回测量';
+    conclusion.reason = '没有拿到有效环回测量（没有任何组拿到数据）';
     exitCode = 1;
   }
   results.conclusion = conclusion;

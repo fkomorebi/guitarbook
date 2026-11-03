@@ -73,6 +73,27 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
     return capture != null && context != null && capture != context;
   }
 
+  /// 浏览器上报的采集缓冲（设备采集侧），0 表示浏览器没有给这个读数。
+  double get _captureLatencyMs => (_status['captureLatencyMs'] as num?)?.toDouble() ?? 0;
+
+  /// 浏览器可见的延迟合计：采集缓冲 + 输出侧缓冲。不等于实测往返延迟。
+  double get _visibleLatencyMs =>
+      _captureLatencyMs + ((_status['latencyMs'] as num?)?.toDouble() ?? 0);
+
+  /// 采集链路说明：低延迟插入式流还是兼容路径。
+  String get _capturePathNote {
+    final path = _status['capturePath']?.toString() ?? '';
+    if (path.contains('TrackProcessor')) {
+      return '采集链路：低延迟插入式流（MediaStreamTrackProcessor），'
+          '绕开浏览器内部的采集重采样与排队；实测比兼容路径再省约 4–14 ms。';
+    }
+    if (path.contains('SourceNode')) {
+      return '采集链路：兼容路径（MediaStreamAudioSourceNode），'
+          '浏览器内部有重采样与排队；Chrome 156 起会自动尝试低延迟插入式流。';
+    }
+    return '';
+  }
+
   /// 采集与输出链路的当前状态摘要。
   String _deviceSummary() {
     final input = (_status['inputChannels'] as num?) ?? 0;
@@ -86,6 +107,8 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
       _latencyOutputOnly
           ? '输出侧延迟 ${latency.toStringAsFixed(1)} ms'
           : '延迟 ${latency.toStringAsFixed(1)} ms',
+      if (_latencyOutputOnly && _captureLatencyMs > 0)
+        '采集缓冲 ${_captureLatencyMs.toStringAsFixed(1)} ms',
     ].join(' · ');
   }
 
@@ -731,12 +754,48 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                         ' + 设备输出 ${(_status['outputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
                         ' = ${(_status['latencyMs'] as num? ?? 0).toStringAsFixed(1)} ms',
                       ),
-                      const Text('以上只是输出侧；采集缓冲由浏览器与系统音频栈决定，页面读不到。往返延迟仍需环回实测。'),
+                      if (_captureLatencyMs > 0)
+                        Text(
+                          '浏览器上报采集缓冲：${_captureLatencyMs.toStringAsFixed(1)} ms'
+                          '（设备采集侧；Linux 上由 Pulse/ALSA 决定）',
+                        ),
+                      if (_capturePathNote.isNotEmpty) Text(_capturePathNote),
+                      Text(
+                        _captureLatencyMs > 0
+                            ? '浏览器可见部分合计：${_visibleLatencyMs.toStringAsFixed(1)} ms'
+                                '（采集 ${_captureLatencyMs.toStringAsFixed(1)} + 输出 ${(_status['latencyMs'] as num? ?? 0).toStringAsFixed(1)}）；'
+                                '剩余延迟在 USB、硬件与系统混音路径上，网页读不到，往返延迟仍需环回实测。'
+                            : '浏览器只提供输出侧读数；采集缓冲要靠系统侧测量，往返延迟仍需环回实测。',
+                      ),
                       if (_captureRateMismatch)
                         Text(
                           '采集 ${_status['captureSampleRate']} Hz 与上下文 ${_status['sampleRate']} Hz 不一致，浏览器会在采集边界重采样，可能多出少量延迟。',
                         ),
-                      const Text('继续降低延迟：使用有线耳机或声卡输出；Linux 上可把 PipeWire quantum 调小（pw-metadata -n settings 0 clock.quantum 128）。'),
+                      const Text('继续降低延迟（按实测收益排序）：'),
+                      if (_captureLatencyMs <= 0)
+                        const Text(
+                          '① 浏览器缓冲（收益最大）：Chrome 默认采集缓冲约 21.3 ms；'
+                          '用 --audio-buffer-size=128 启动 Chrome 可降到约 2.7 ms，'
+                          'Scarlett 环回实测往返从约 72 ms 降到约 45 ms。'
+                          '仓库脚本：tool/web_low_latency.sh。',
+                        )
+                      else if (_captureLatencyMs > 10)
+                        Text(
+                          '① 浏览器缓冲（收益最大）：当前采集缓冲 '
+                          '${_captureLatencyMs.toStringAsFixed(1)} ms；'
+                          '用 --audio-buffer-size=128 启动 Chrome 可降到约 2.7 ms，'
+                          'Scarlett 环回实测往返从约 72 ms 降到约 45 ms。'
+                          '仓库脚本：tool/web_low_latency.sh。',
+                        ),
+                      const Text(
+                        '② 桌面原生宿主：guitarbook_effects_host 直接读写声卡'
+                        '（64/128 帧块），不经过浏览器的多层缓冲；'
+                        '要进到 20 ms 以内只能走这条。',
+                      ),
+                      const Text(
+                        '③ Linux 系统侧：PipeWire quantum 调小只对走 Pulse 的链路有效'
+                        '（桌面端或 ALSA 直连）；本机 Chrome 环回实测几乎无变化。',
+                      ),
                     ] else ...[
                       if (_status['latencyAvailable'] != false)
                         Text(
