@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>guitarbook · 浏览器效果器监听延迟探针</title>
+<style>
+  body { margin: 0; padding: 16px; background: #101418; color: #d6dde4; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+  h1 { font-size: 15px; margin: 0 0 8px; color: #e8eef4; }
+  p { margin: 0 0 12px; color: #8b98a5; }
+  pre { white-space: pre-wrap; margin: 0; }
+  #status { color: #7fd1a0; }
+</style>
+</head>
+<body>
+<h1>guitarbook · 浏览器效果器监听延迟环回测量</h1>
+<p>
+  由 tool/check_web_latency.mjs 通过 CDP 驱动；本页只负责建链路、发脉冲、测到达时刻。
+  测量链路：脉冲 buffer → AudioWorkletNode('guitarbook-effects') → destination，
+  同时用 getUserMedia 从声卡环回源采集，AudioWorklet 以 currentTime 记录到达时刻。
+</p>
+<div id="status">idle</div>
+<pre id="log"></pre>
+<script>
+'use strict';
+
+(function () {
+  // ---------------------------------------------------------------------------
+  // 常量：脉冲串参数。改这里要同步 check_web_latency.mjs 里的方法说明。
+  // ---------------------------------------------------------------------------
+  const PULSE_COUNT = 16;        // 每次测量发 16 个脉冲，前 3 个丢弃（预热）
+  const PULSE_SPACING = 0.35;    // 脉冲间隔（秒）
+  const PULSE_FIRST_OFFSET = 0.05;
+  const PULSE_AMPLITUDE = 0.4;   // -8 dBFS，避免削波
+  const PULSE_SECONDS = 0.012;   // 每个脉冲 12 ms
+  const PULSE_FREQ = 1000;       // 1 kHz
+  const ATTACK_SECONDS = 0.0005;
+  const RELEASE_SECONDS = 0.002;
+  const DETECT_THRESHOLD = 0.05;
+  const WARMUP_PULSES = 3;       // 统计时丢弃的脉冲数
+
+  const logEl = document.getElementById('log');
+  const statusEl = document.getElementById('status');
+  const logs = [];
+
+  function log () {
+    const line = Array.prototype.map.call(arguments, v => (
+      typeof v === 'string' ? v : JSON.stringify(v)
+    )).join(' ');
+    logs.push(line);
+    logEl.textContent = logs.join('\n');
+    console.log('[probe] ' + line);
+  }
+
+  function setStatus (text) {
+    statusEl.textContent = text;
+  }
+
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  function supportedConstraints () {
+    try {
+      const md = navigator.mediaDevices;
+      return (md && md.getSupportedConstraints) ? md.getSupportedConstraints() : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  // 页面加载时先抓一份完整 constraints 列表，回调里只挑常用字段报告。
+  const CONSTRAINTS_FULL = supportedConstraints();
+  const CONSTRAINT_KEYS = [
+    'deviceId', 'groupId', 'sampleRate', 'sampleSize', 'channelCount',
+    'latency', 'echoCancellation', 'noiseSuppression', 'autoGainControl',
+    'volume', 'autoGainControl'
+  ];
+
+  // ---------------------------------------------------------------------------
+  // 脉冲串
+  // ---------------------------------------------------------------------------
+  function buildPulseBuffer (ctx) {
+    const rate = ctx.sampleRate;
+    const total = PULSE_FIRST_OFFSET + (PULSE_COUNT - 1) * PULSE_SPACING + 0.3;
+    const buffer = ctx.createBuffer(1, Math.ceil(total * rate), rate);
+    const data = buffer.getChannelData(0);
+    const pulseFrames = Math.max(1, Math.round(PULSE_SECONDS * rate));
+    const attackFrames = Math.max(1, Math.round(ATTACK_SECONDS * rate));
+    const releaseFrames = Math.max(1, Math.round(RELEASE_SECONDS * rate));
+    const omega = 2 * Math.PI * PULSE_FREQ / rate;
+    for (let p = 0; p < PULSE_COUNT; p++) {
+      const start = Math.round((PULSE_FIRST_OFFSET + p * PULSE_SPACING) * rate);
+      for (let i = 0; i < pulseFrames; i++) {
+        const index = start + i;
+        if (index >= data.length) break;
+        let envelope = 1;
+        if (i < attackFrames) envelope = i / attackFrames;
+        else if (i > pulseFrames - releaseFrames) envelope = (pulseFrames - i) / releaseFrames;
+        data[index] = PULSE_AMPLITUDE * envelope * Math.sin(omega * i);
+      }
+    }
+    return buffer;
+  }
+
+  // 与 lib/features/effects/effects_backend_web.dart 的 AudioWorkletNodeOptions 保持一致。
+  function createEffectsNode (ctx) {
+    return new AudioWorkletNode(ctx, 'guitarbook-effects', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      channelCount: 2,
+      channelCountMode: 'explicit'
+    });
+  }
+
+  function createDetector (ctx) {
+    return new AudioWorkletNode(ctx, 'latency-detector', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+      channelCount: 1,
+      channelCountMode: 'explicit',
+      processorOptions: { threshold: DETECT_THRESHOLD, timeoutSec: 0.3 }
+    });
+  }
+
+  function collectTrackInfo (stream) {
+    const track = stream && stream.getAudioTracks ? stream.getAudioTracks()[0] : null;
+    if (!track) return null;
+    const info = {
+      label: track.label,
+      enabled: track.enabled,
+      muted: track.muted,
+      readyState: track.readyState
+    };
+    try {
+      const settings = track.getSettings ? track.getSettings() : {};
+      info.settings = {};
+      for (const key of Object.keys(settings)) info.settings[key] = settings[key];
+    } catch (e) {
+      info.settingsError = String(e);
+    }
+    try {
+      const caps = track.getCapabilities ? track.getCapabilities() : null;
+      if (caps) {
+        info.capabilities = {};
+        for (const key of ['sampleRate', 'channelCount', 'latency']) {
+          if (caps[key] !== undefined) info.capabilities[key] = caps[key];
+        }
+      }
+    } catch (e) {
+      info.capabilitiesError = String(e);
+    }
+    return info;
+  }
+
+  async function enumerateAudioInputs () {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices
+      .filter(d => d.kind === 'audioinput')
+      .map(d => ({ label: d.label, deviceId: d.deviceId, groupId: d.groupId }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // 一次完整测量
+  // ---------------------------------------------------------------------------
+  let busy = false;
+
+  async function runProbe (config) {
+    if (busy) throw new Error('上一个测量还没结束');
+    busy = true;
+    setStatus('running: ' + (config && config.name));
+    const startedAt = new Date().toISOString();
+    const result = {
+      name: config && config.name ? config.name : 'unnamed',
+      mode: (config && config.mode) || 'loopback',
+      requested: {
+        latencyHint: config && config.latencyHint !== undefined ? config.latencyHint : 'default',
+        sampleRate: (config && config.sampleRate) || 48000,
+        gumExtra: (config && config.gumExtra) || {}
+      },
+      requestedGum: null,
+      actualGum: null,
+      context: null,
+      outputTimestamp: [],
+      devices: [],
+      supportedConstraints: {},
+      pulses: [],
+      measurementsMs: [],
+      errors: [],
+      startedAt
+    };
+
+    let ctx = null;
+    let monitorStream = null;
+    let fakeStream = null;
+    let detector = null;
+    let player = null;
+
+    const nodes = [];
+    const track = node => { nodes.push(node); return node; };
+
+    try {
+      let pairs = Object.keys(CONSTRAINTS_FULL);
+      for (const key of pairs) result.supportedConstraints[key] = !!CONSTRAINTS_FULL[key];
+      for (const key of CONSTRAINT_KEYS) {
+        if (result.supportedConstraints[key] === undefined) result.supportedConstraints[key] = false;
+      }
+
+      const options = { sampleRate: result.requested.sampleRate };
+      if (result.requested.latencyHint !== 'default') options.latencyHint = result.requested.latencyHint;
+      ctx = new AudioContext(options);
+      const resumeResult = ctx.resume();
+      if (resumeResult && typeof resumeResult.then === 'function') await resumeResult;
+
+      // 相对路径解析：http(s) 服务下得到 /web/...、/tool/...，
+      // file:// 下得到同级文件 URL（本沙箱里 Chrome 的 http 出站被拦，只能用 file://）。
+      const effectsModule = new URL('../web/effects_worklet.js', location.href).href;
+      const detectorModule = new URL('latency_probe_worklet.js', location.href).href;
+      await ctx.audioWorklet.addModule(effectsModule);
+      await ctx.audioWorklet.addModule(detectorModule);
+
+      for (let i = 0; i < 200 && ctx.state !== 'running'; i++) await sleep(25);
+      result.context = {
+        state: ctx.state,
+        sampleRate: ctx.sampleRate,
+        baseLatency: ctx.baseLatency,
+        outputLatency: ctx.outputLatency,
+        destinationMaxChannelCount: ctx.destination.maxChannelCount,
+        audioWorkletModule: effectsModule
+      };
+
+      // getOutputTimestamp 映射（contextTime ↔ performanceTime），只作参考。
+      try {
+        for (let i = 0; i < 3; i++) {
+          const ts = ctx.getOutputTimestamp ? ctx.getOutputTimestamp() : null;
+          if (ts) result.outputTimestamp.push({ contextTime: ts.contextTime, performanceTime: ts.performanceTime, now: performance.now() });
+          await sleep(20);
+        }
+      } catch (e) { result.errors.push('getOutputTimestamp: ' + String(e)); }
+
+      // 找到环回源（sink monitor）。第一次 getUserMedia 用于拿权限和 label。
+      if (result.mode !== 'ingraph') {
+        result.devices = await enumerateAudioInputs();
+        let monitor = result.devices.find(d => /monitor/i.test(d.label || '') && /focusrite|scarlett|line1/i.test(d.label || ''));
+        if (!monitor) monitor = result.devices.find(d => /monitor/i.test(d.label || ''));
+        if (!monitor) throw new Error('没有找到 monitor 环回输入设备；已枚举：' + JSON.stringify(result.devices));
+        result.monitor = { label: monitor.label, deviceId: monitor.deviceId };
+
+        const gumAudio = Object.assign({
+          deviceId: { exact: monitor.deviceId },
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          channelCount: 1
+        }, result.requested.gumExtra);
+        result.requestedGum = {
+          deviceId: 'exact:' + monitor.deviceId,
+          label: monitor.label,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          channelCount: 1
+        };
+        for (const key of Object.keys(result.requested.gumExtra)) {
+          result.requestedGum[key] = result.requested.gumExtra[key];
+        }
+
+        monitorStream = await navigator.mediaDevices.getUserMedia({ audio: gumAudio });
+        result.actualGum = collectTrackInfo(monitorStream);
+
+        // 测量链：monitor 采集 → detector（静音输出）→ 0 增益 → destination
+        const monitorSource = track(ctx.createMediaStreamSource(monitorStream));
+        detector = track(createDetector(ctx));
+        const silent = track(ctx.createGain());
+        silent.gain.value = 0;
+        monitorSource.connect(detector);
+        detector.connect(silent);
+        silent.connect(ctx.destination);
+        log('detector wired (loopback)');
+      } else {
+        // 对照组：输入走假设备，只测图内延迟。
+        result.devices = await enumerateAudioInputs();
+        try {
+          fakeStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          });
+          result.actualGum = collectTrackInfo(fakeStream);
+          // 假输入也走一遍 麦克风 → worklet → destination（muted），只为验证链路可跑。
+          const fakeSource = track(ctx.createMediaStreamSource(fakeStream));
+          const fakeEffects = track(createEffectsNode(ctx));
+          const fakeMute = track(ctx.createGain());
+          fakeMute.gain.value = 0;
+          fakeSource.connect(fakeEffects);
+          fakeEffects.connect(fakeMute);
+          fakeMute.connect(ctx.destination);
+          log('fake input wired (muted)');
+        } catch (e) {
+          result.errors.push('fake input: ' + String(e));
+        }
+        detector = track(createDetector(ctx));
+        const silent = track(ctx.createGain());
+        silent.gain.value = 0;
+        detector.connect(silent);
+        silent.connect(ctx.destination);
+      }
+
+      // 输出侧：脉冲串（已知时刻）→ 真实 effects worklet → destination
+      const pulseBuffer = buildPulseBuffer(ctx);
+      const playerNode = track(ctx.createBufferSource());
+      playerNode.buffer = pulseBuffer;
+      const pulseEffects = track(createEffectsNode(ctx));
+      playerNode.connect(pulseEffects);
+      if (result.mode === 'ingraph') {
+        // 图内检测：effects 输出直接进 detector（同一个 render quantum 内可见）
+        pulseEffects.connect(detector);
+      } else {
+        pulseEffects.connect(ctx.destination);
+      }
+      player = playerNode;
+
+      const t0 = ctx.currentTime + 0.4;
+      const expected = [];
+      for (let i = 0; i < PULSE_COUNT; i++) {
+        expected.push({
+          index: i,
+          expected: t0 + PULSE_FIRST_OFFSET + i * PULSE_SPACING
+        });
+      }
+
+      const detections = [];
+      detector.port.onmessage = event => {
+        const data = event.data || {};
+        if (data.type === 'detection' || data.type === 'missed') {
+          detections.push(data);
+          if (data.type === 'detection') result.measurementsMs.push(data.deltaMs);
+        }
+      };
+      detector.port.postMessage({ type: 'arm', pulses: expected });
+      log('armed ' + expected.length + ' pulses, t0=' + t0.toFixed(4));
+      log('requested: ' + JSON.stringify(result.requested) + ' reported: ' + JSON.stringify(result.context));
+
+      playerNode.start(t0);
+      playerNode.stop(t0 + pulseBuffer.duration + 0.1);
+
+      const endTime = t0 + pulseBuffer.duration + 0.4;
+      while (ctx.currentTime < endTime) await sleep(50);
+
+      // 等最后一帧消息回到主线程。
+      await sleep(100);
+      result.pulses = detections.map(d => ({
+        index: d.index,
+        expected: d.expected,
+        arrival: d.arrival === undefined ? null : d.arrival,
+        deltaMs: d.deltaMs === undefined ? null : d.deltaMs,
+        peak: d.peak === undefined ? null : d.peak,
+        missed: dataIsMissed(d)
+      }));
+      function dataIsMissed (d) { return d.type === 'missed'; }
+
+      const usable = detections.filter(d => d.type === 'detection' && d.index >= WARMUP_PULSES);
+      result.measurementsMs = usable.map(d => d.deltaMs);
+      result.warmupPulsesDropped = WARMUP_PULSES;
+      result.detected = detections.filter(d => d.type === 'detection').length;
+      result.missed = detections.filter(d => d.type === 'missed').length;
+
+      if (result.measurementsMs.length === 0) {
+        result.errors.push('没有检测到任何环回脉冲：' + JSON.stringify(result.pulses));
+      }
+    } catch (error) {
+      result.errors.push(String(error && error.stack ? error.stack : error));
+      log('ERROR ' + String(error));
+    } finally {
+      try { if (player) { player.stop(); player.disconnect(); } } catch (e) {}
+      for (const node of nodes) { try { node.disconnect(); } catch (e) {} }
+      try { if (monitorStream) monitorStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      try { if (fakeStream) fakeStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      try { if (ctx) await ctx.close(); } catch (e) {}
+      busy = false;
+      setStatus('idle (' + result.name + ')');
+      log('run finished: ' + result.name + ' measurements=' + result.measurementsMs.length + ' errors=' + result.errors.length);
+    }
+
+    result.finishedAt = new Date().toISOString();
+    window.__latencyProbe.lastResult = result;
+    return result;
+  }
+
+  const api = {
+    version: 1,
+    run: runProbe,
+    supportedConstraints: CONSTRAINTS_FULL,
+    enumerate: enumerateAudioInputs,
+    pulse: {
+      count: PULSE_COUNT,
+      spacing: PULSE_SPACING,
+      firstOffset: PULSE_FIRST_OFFSET,
+      amplitude: PULSE_AMPLITUDE,
+      seconds: PULSE_SECONDS,
+      frequencyHz: PULSE_FREQ,
+      detectThreshold: DETECT_THRESHOLD,
+      warmupPulses: WARMUP_PULSES
+    },
+    state: { busy: false, logs },
+    lastResult: null
+  };
+  window.__latencyProbe = api;
+  log('probe page ready; constraints=' + JSON.stringify(api.supportedConstraints));
+})();
+</script>
+</body>
+</html>

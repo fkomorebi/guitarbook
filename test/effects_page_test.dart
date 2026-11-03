@@ -182,6 +182,29 @@ class MobileEffects extends FakeEffects {
   };
 }
 
+class FakeWebEffects extends FakeEffects {
+  int captureSampleRate = 48000;
+
+  @override
+  Future<Map<String, dynamic>> send(
+    String command, [
+    Map<String, dynamic> arguments = const {},
+  ]) async => {
+    ...await super.send(command, arguments),
+    'backend': 'Web Audio (AudioWorklet)',
+    'device': '浏览器音频设备',
+    'inputChannels': 1,
+    'outputChannels': 2,
+    'latencyScope': 'output-only',
+    'baseLatencyMs': 10.7,
+    'outputLatencyMs': 54.0,
+    'latencyMs': 64.7,
+    'latencyAvailable': true,
+    'captureSampleRate': captureSampleRate,
+    'cpuAvailable': false,
+  };
+}
+
 /// 把效果器页滚动到能看见 [finder] 的位置。
 Future<void> _scrollTo(WidgetTester tester, Finder finder) async {
   await tester.ensureVisible(finder);
@@ -522,6 +545,50 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('每块 5.33 ms'), findsOneWidget);
     expect(find.textContaining('驱动报告：输入 8.0 ms'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('网页后端说明缓冲不可调，并区分输出侧报告与实测往返延迟', (tester) async {
+    tester.view.physicalSize = const Size(1440, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    final backend = FakeWebEffects();
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pump();
+    expect(find.textContaining('输出侧延迟 64.7 ms'), findsOneWidget);
+
+    await _scrollTo(tester, find.text('声卡设置与延迟诊断'));
+    await tester.tap(find.text('声卡设置与延迟诊断'));
+    await tester.pumpAndSettle();
+    expect(find.text('64 帧'), findsNothing);
+    expect(find.text('256 帧'), findsNothing);
+    await _scrollTo(tester, find.textContaining('网页端监听缓冲由浏览器'));
+    await _scrollTo(tester, find.textContaining('图内缓冲 10.7 ms'));
+    expect(find.textContaining('+ 设备输出 54.0 ms = 64.7 ms'), findsOneWidget);
+    await _scrollTo(tester, find.textContaining('以上只是输出侧'));
+    expect(find.textContaining('驱动报告'), findsNothing);
+    expect(find.textContaining('报告合计'), findsNothing);
+    expect(find.textContaining('报告延迟偏高'), findsNothing);
+    await _scrollTo(tester, find.textContaining('继续降低延迟'));
+    expect(find.textContaining('PipeWire quantum'), findsOneWidget);
+    expect(find.textContaining('采集 48000 Hz'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('网页采集与上下文采样率不一致时提示重采样', (tester) async {
+    tester.view.physicalSize = const Size(1440, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    final backend = FakeWebEffects()..captureSampleRate = 44100;
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pump();
+    await _scrollTo(tester, find.text('声卡设置与延迟诊断'));
+    await tester.tap(find.text('声卡设置与延迟诊断'));
+    await tester.pumpAndSettle();
+    await _scrollTo(tester, find.textContaining('采集 44100 Hz'));
+    expect(find.textContaining('采集 44100 Hz 与上下文 48000 Hz'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

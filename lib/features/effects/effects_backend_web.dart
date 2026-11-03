@@ -16,7 +16,8 @@ import 'package:web/web.dart' as web;
 ///
 /// 网页端特有约束：
 /// - 不支持 VST3、声卡/输入通道设置与湿声 Looper；
-/// - 延迟由浏览器 I/O 缓冲决定，只能给估算值；
+/// - 延迟由浏览器 I/O 缓冲决定：只有输出侧（`baseLatency` + `outputLatency`）
+///   有读数，采集缓冲由浏览器与系统音频栈控制，页面读不到，往返延迟需环回实测；
 /// - 首次启动必须由用户手势触发（浏览器自动播放策略）。
 class EffectsBackend {
   /// 效果链最多 8 块（与原生宿主一致）。
@@ -60,6 +61,10 @@ class EffectsBackend {
   String? _notice;
   String? _workletError;
   String? _inputDevice;
+
+  /// 采集轨道的实际设置：用于判断浏览器采集侧是否发生了重采样。
+  int? _captureSampleRate;
+  int? _captureChannels;
 
   /// 网页端不是移动端适配层。
   bool get mobile => false;
@@ -172,8 +177,11 @@ class EffectsBackend {
       throw _WebEffectsException(_mobileNotice);
     }
     final activation = _userActivation();
+    // 数字 0 让 Chrome 取最小内部缓冲；本机环回实测比 'interactive'
+    // 少 8 ms 端到端（baseLatency 10.7 → 2.7 ms）。不支持数字提示的
+    // 浏览器（Firefox / Safari）会忽略它，行为与不传一致。
     final context = _context ??= web.AudioContext(
-      web.AudioContextOptions(latencyHint: 'interactive'.toJS),
+      web.AudioContextOptions(latencyHint: 0.toJS),
     );
     if (!activation.hasBeenActive) {
       // 文档从未被用户激活：浏览器必定拦截自动播放，先把 DSP 预加载好。
@@ -246,6 +254,8 @@ class EffectsBackend {
     _running = false;
     _inputPeak = 0;
     _outputPeak = 0;
+    _captureSampleRate = null;
+    _captureChannels = null;
     return _status();
   }
 
@@ -281,7 +291,8 @@ class EffectsBackend {
   /// 申请麦克风并搭好 `麦克风 → worklet → 扬声器` 的链路。
   Future<void> _openInput(web.AudioContext context) async {
     if (_node != null) return;
-    final stream = await _requestMicrophone();
+    final stream = await _requestMicrophone(context);
+    _readCaptureSettings(stream);
     final source = context.createMediaStreamSource(stream);
     final node = web.AudioWorkletNode(
       context,
@@ -304,22 +315,66 @@ class EffectsBackend {
     if (label != null) _inputDevice = label;
   }
 
-  Future<web.MediaStream> _requestMicrophone() async {
+  /// 申请单声道、关闭全部采集处理的麦克风。
+  ///
+  /// 约束取舍（依据 Chromium 与 Web Audio 的实现）：
+  /// - 关闭三项处理后才可能走到 Chromium 的未处理采集路径，缓冲直通设备；
+  /// - `latency` 只在上述路径生效，Linux 的 PulseAudio 后端不上报缓冲能力，
+  ///   约束会被夹回默认缓冲（无收益但无害），因此先问浏览器是否支持；
+  /// - `sampleRate` 取上下文采样率作理想值：与设备一致时省掉
+  ///   `MediaStreamAudioSourceNode` 边界处的重采样，不一致时浏览器仍会自行转换。
+  Future<web.MediaStream> _requestMicrophone(web.AudioContext context) async {
+    final constraints = web.MediaTrackConstraints(
+      echoCancellation: false.toJS,
+      noiseSuppression: false.toJS,
+      autoGainControl: false.toJS,
+      channelCount: 1.0.toJS,
+    );
+    if (_supportsConstraint('latency')) {
+      constraints.setProperty('latency'.toJS, 0.005.toJS);
+    }
+    final rate = context.sampleRate;
+    if (rate.isFinite && rate > 0 && _supportsConstraint('sampleRate')) {
+      constraints.setProperty('sampleRate'.toJS, rate.toDouble().toJS);
+    }
     try {
       return await web.window.navigator.mediaDevices
-          .getUserMedia(
-            web.MediaStreamConstraints(
-              audio: web.MediaTrackConstraints(
-                echoCancellation: false.toJS,
-                noiseSuppression: false.toJS,
-                autoGainControl: false.toJS,
-                channelCount: 1.0.toJS,
-              ),
-            ),
-          )
+          .getUserMedia(web.MediaStreamConstraints(audio: constraints))
           .toDart;
     } catch (error) {
       throw _WebEffectsException(_describeMediaError(error));
+    }
+  }
+
+  /// 浏览器是否识别某个采集约束（不支持的约束会被静默忽略）。
+  bool _supportsConstraint(String name) {
+    try {
+      final supported = web.window.navigator.mediaDevices
+          .getSupportedConstraints()
+          .dartify();
+      if (supported is Map) return supported[name] == true;
+    } catch (_) {
+      // 没有 getSupportedConstraints 或返回值不可序列化时按不支持处理。
+    }
+    return false;
+  }
+
+  /// 记录采集轨道的实际设置；浏览器可能不提供，因此只用于诊断。
+  void _readCaptureSettings(web.MediaStream stream) {
+    try {
+      for (final track in stream.getAudioTracks().toDart) {
+        final settings = track.getSettings().dartify();
+        if (settings is! Map) continue;
+        final rate = settings['sampleRate'];
+        final channels = settings['channelCount'];
+        if (rate is num && rate > 0) _captureSampleRate = rate.round();
+        if (channels is num && channels > 0) {
+          _captureChannels = channels.round();
+        }
+        return;
+      }
+    } catch (_) {
+      // 个别浏览器不提供轨道设置。
     }
   }
 
@@ -463,7 +518,9 @@ class EffectsBackend {
 
   /// 网页端缓冲由浏览器决定，此命令不生效，仅回报提示。
   Future<Map<String, dynamic>> _audioBuffer(Map<String, dynamic> args) async {
-    _notice = '网页端缓冲由浏览器决定（音频延迟取决于系统与浏览器的 I/O 缓冲）。';
+    _notice =
+        '网页端监听缓冲由浏览器与系统音频栈决定，页面无法调整；'
+        '效果链固定按 128 帧处理，输出缓冲见「声卡设置与延迟诊断」。';
     return _status();
   }
 
@@ -531,6 +588,7 @@ class EffectsBackend {
   Map<String, dynamic> _status() {
     final context = _context;
     final sampleRate = context == null ? 48000 : context.sampleRate.round();
+    final latency = _latencyBreakdown(context);
     final plugins = <Map<String, dynamic>>[];
     final wetOnly = <String>[];
     for (final slot in _chain) {
@@ -562,11 +620,18 @@ class EffectsBackend {
       'requestedBuffer': _renderQuantum,
       'setupNotice': _workletError ?? _notice,
       'pipewireQuantum': '',
+      'inputChannels': _stream == null ? 0 : (_captureChannels ?? 1),
+      'outputChannels': 2,
       'inputLatencyMs': 0.0,
-      'outputLatencyMs': 0.0,
+      'outputLatencyMs': latency.deviceMs,
       'pluginLatencyMs': 0.0,
-      'latencyMs': _latencyEstimateMs(context),
-      'latencyAvailable': false,
+      // 只有输出侧（图内缓冲 + 设备输出）有浏览器读数；采集侧必须环回实测。
+      'latencyScope': 'output-only',
+      'latencyMs': latency.totalMs,
+      'latencyAvailable': context != null,
+      'baseLatencyMs': latency.baseMs,
+      'captureSampleRate': _captureSampleRate,
+      'captureChannels': _captureChannels,
       'blockMs': _renderQuantum * 1000.0 / sampleRate,
       'xruns': -1,
       'cpu': 0.0,
@@ -596,23 +661,33 @@ class EffectsBackend {
     return state == 'closed' || state == 'interrupted';
   }
 
-  /// 延迟只能估算：baseLatency + outputLatency（浏览器不一定提供）。
-  double _latencyEstimateMs(web.AudioContext? context) {
-    if (context == null) return 0;
-    var seconds = 0.0;
+  /// 浏览器报告的延迟构成。
+  ///
+  /// `baseLatency` 是图内输出缓冲（Chromium 上约等于渲染回调块长），
+  /// `outputLatency` 是音频栈到硬件输出的排队时间。两者只覆盖输出侧，
+  /// 采集缓冲（Linux 上由 PulseAudio/PipeWire 决定）没有对应 API，
+  /// 所以网页端的往返延迟只能靠环回实测，不能拿这里的和当成实测值。
+  ({double baseMs, double deviceMs, double totalMs}) _latencyBreakdown(
+    web.AudioContext? context,
+  ) {
+    if (context == null) {
+      return (baseMs: 0, deviceMs: 0, totalMs: 0);
+    }
+    var baseMs = 0.0;
+    var deviceMs = 0.0;
     try {
       final base = context.baseLatency;
-      if (base.isFinite && base > 0) seconds += base;
+      if (base.isFinite && base > 0) baseMs = base * 1000.0;
     } catch (_) {
       // 浏览器未提供 baseLatency。
     }
     try {
       final output = context.outputLatency;
-      if (output.isFinite && output > 0) seconds += output;
+      if (output.isFinite && output > 0) deviceMs = output * 1000.0;
     } catch (_) {
       // Firefox 等浏览器未提供 outputLatency。
     }
-    return seconds * 1000.0;
+    return (baseMs: baseMs, deviceMs: deviceMs, totalMs: baseMs + deviceMs);
   }
 
   int _indexOf(Map<String, dynamic> args) {

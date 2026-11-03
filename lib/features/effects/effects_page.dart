@@ -63,6 +63,16 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
   bool get _noInputSignal => _running && _status['noInputSignal'] == true;
   List<dynamic> get _plugins => _status['plugins'] as List<dynamic>? ?? [];
 
+  /// 网页端只报告输出侧延迟，采集缓冲读不到，不能当作往返延迟。
+  bool get _latencyOutputOnly => _status['latencyScope'] == 'output-only';
+
+  /// 采集采样率与上下文采样率不一致时，浏览器会在采集边界重采样。
+  bool get _captureRateMismatch {
+    final capture = (_status['captureSampleRate'] as num?)?.round();
+    final context = (_status['sampleRate'] as num?)?.round();
+    return capture != null && context != null && capture != context;
+  }
+
   /// 采集与输出链路的当前状态摘要。
   String _deviceSummary() {
     final input = (_status['inputChannels'] as num?) ?? 0;
@@ -73,7 +83,9 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
       '输入 $input 声道',
       '输出 $output 声道',
       if (backend.isNotEmpty) '后端 $backend',
-      '延迟 ${latency.toStringAsFixed(1)} ms',
+      _latencyOutputOnly
+          ? '输出侧延迟 ${latency.toStringAsFixed(1)} ms'
+          : '延迟 ${latency.toStringAsFixed(1)} ms',
     ].join(' · ');
   }
 
@@ -672,27 +684,33 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
               child: ExpansionTile(
                 key: const PageStorageKey('effects-diagnostics'),
                 title: const Text('声卡设置与延迟诊断'),
-                subtitle: const Text('缓冲 · 设备 · 性能'),
+                subtitle: Text(
+                  _latencyOutputOnly ? '延迟构成 · 采样率 · 建议' : '缓冲 · 设备 · 性能',
+                ),
                 childrenPadding: const EdgeInsets.all(16),
                 expandedCrossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const SizedBox(height: 12),
-                  const Text('监听缓冲：越小反应越快；出现爆音、断续时调到 256 或 512 帧。停止监听后调整。'),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
-                      for (final frames in [64, 128, 256, 512])
-                        ChoiceChip(
-                          label: Text('$frames 帧'),
-                          selected:
-                              (_status['requestedBuffer'] ?? 128) == frames,
-                          onSelected: canConfigure
-                              ? (_) => _send('audioBuffer', {'frames': frames})
-                              : null,
-                        ),
-                    ],
-                  ),
+                  if (_latencyOutputOnly)
+                    const Text('网页端监听缓冲由浏览器与系统音频栈决定，页面无法调整；效果链固定按 128 帧处理。')
+                  else ...[
+                    const Text('监听缓冲：越小反应越快；出现爆音、断续时调到 256 或 512 帧。停止监听后调整。'),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        for (final frames in [64, 128, 256, 512])
+                          ChoiceChip(
+                            label: Text('$frames 帧'),
+                            selected:
+                                (_status['requestedBuffer'] ?? 128) == frames,
+                            onSelected: canConfigure
+                                ? (_) => _send('audioBuffer', {'frames': frames})
+                                : null,
+                          ),
+                      ],
+                    ),
+                  ],
                   if (_connected) ...[
                     Text(
                       '${_status['backend'] ?? ''} · ${_status['device'] ?? ''}',
@@ -707,20 +725,34 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                           : '${_status['sampleRate']} Hz · 实际 ${_status['bufferSize']} 帧'
                                 ' · 每块 ${(_status['blockMs'] as num? ?? 0).toStringAsFixed(2)} ms',
                     ),
-                    if (_status['latencyAvailable'] != false)
+                    if (_latencyOutputOnly) ...[
                       Text(
-                        '驱动报告：输入 ${(_status['inputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
-                        ' / 输出 ${(_status['outputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
-                        ' · 插件 ${(_status['pluginLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms',
+                        '浏览器报告输出延迟：图内缓冲 ${(_status['baseLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
+                        ' + 设备输出 ${(_status['outputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
+                        ' = ${(_status['latencyMs'] as num? ?? 0).toStringAsFixed(1)} ms',
                       ),
-                    if (_status['latencyAvailable'] != false)
-                      Text(
-                        '报告合计 ${(_status['latencyMs'] as num? ?? 0).toStringAsFixed(1)} ms（非实测往返延迟）'
-                        '${_status['cpuAvailable'] == false ? '' : ' · 音频负载 ${((_status['cpu'] as num? ?? 0) * 100).toStringAsFixed(1)}%'}'
-                        '${(_status['xruns'] as num? ?? -1) >= 0 ? ' · 欠载 ${_status['xruns']} 次' : ''}',
-                      ),
-                    if (_status['latencyAvailable'] == false)
-                      const Text('当前后端不提供可靠的驱动延迟报告，往返延迟需实际测量。'),
+                      const Text('以上只是输出侧；采集缓冲由浏览器与系统音频栈决定，页面读不到。往返延迟仍需环回实测。'),
+                      if (_captureRateMismatch)
+                        Text(
+                          '采集 ${_status['captureSampleRate']} Hz 与上下文 ${_status['sampleRate']} Hz 不一致，浏览器会在采集边界重采样，可能多出少量延迟。',
+                        ),
+                      const Text('继续降低延迟：使用有线耳机或声卡输出；Linux 上可把 PipeWire quantum 调小（pw-metadata -n settings 0 clock.quantum 128）。'),
+                    ] else ...[
+                      if (_status['latencyAvailable'] != false)
+                        Text(
+                          '驱动报告：输入 ${(_status['inputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
+                          ' / 输出 ${(_status['outputLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms'
+                          ' · 插件 ${(_status['pluginLatencyMs'] as num? ?? 0).toStringAsFixed(1)} ms',
+                        ),
+                      if (_status['latencyAvailable'] != false)
+                        Text(
+                          '报告合计 ${(_status['latencyMs'] as num? ?? 0).toStringAsFixed(1)} ms（非实测往返延迟）'
+                          '${_status['cpuAvailable'] == false ? '' : ' · 音频负载 ${((_status['cpu'] as num? ?? 0) * 100).toStringAsFixed(1)}%'}'
+                          '${(_status['xruns'] as num? ?? -1) >= 0 ? ' · 欠载 ${_status['xruns']} 次' : ''}',
+                        ),
+                      if (_status['latencyAvailable'] == false)
+                        const Text('当前后端不提供可靠的驱动延迟报告，往返延迟需实际测量。'),
+                    ],
                     if (_status['cpuAvailable'] == false)
                       const Text('当前后端不提供音频负载统计。'),
                     if (_status['outputBufferFrames'] != null)
@@ -737,7 +769,8 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                     if ((_status['bufferSize'] as num? ?? 0) >
                         (_status['requestedBuffer'] as num? ?? 128))
                       const Text('实际缓冲大于请求值，请检查声卡后端及系统音频限制。'),
-                    if ((_status['latencyMs'] as num? ?? 0) >= 20)
+                    if (!_latencyOutputOnly &&
+                        (_status['latencyMs'] as num? ?? 0) >= 20)
                       const Text(
                         '报告延迟偏高：优先使用同一声卡的输入和有线耳机输出；可在声卡设置中尝试直接硬件设备或 JACK。',
                       ),

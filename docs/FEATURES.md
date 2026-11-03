@@ -20,7 +20,7 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 | 功能 | 设计状态 | 实现状态 | 平台情况 |
 | --- | --- | --- | --- |
 | 应用基础框架 | 本次初始化范围 | 已实现独立入口、统一主题、工具首页及调音器入口；静态分析通过；完整 Flutter 测试 25 项通过 | 六个平台共用界面代码；Linux Debug 与 Web 构建通过，其他平台构建及各平台运行待验证 |
-| 实时吉他效果器宿主 | Android / iOS / Linux / Windows 内置六类单块、四种箱头；桌面另支持 VST3；电脑端浏览器新增内置效果器（本次变更） | 已实现独立页自动监听、工作台设备检测、监听中效果链编辑与可拖动排序的拟物单块效果器板；离线测试通过；电脑端浏览器版 DSP 与 Web 后端均已实现，并通过离线回归、浏览器 DSP 端到端与整页自动化实测 | Linux Debug 及声卡静音缓冲验证通过；2026-11-03 修正工作台“没有收到输入数据”提示语义（仅连续 3 秒精确数字静音才提示），并实测本机默认输入为声卡回环时确实采不到吉他；Windows 未构建，两平台真实演奏听感待验证；Android / iOS 新增原生接入，构建与真机验证见文末；macOS 不支持；电脑端浏览器版真机听感与实测延迟待验证（见「电脑端 Web 效果器」一节） |
+| 实时吉他效果器宿主 | Android / iOS / Linux / Windows 内置六类单块、四种箱头；桌面另支持 VST3；电脑端浏览器新增内置效果器（本次变更） | 已实现独立页自动监听、工作台设备检测、监听中效果链编辑与可拖动排序的拟物单块效果器板；离线测试通过；电脑端浏览器版 DSP 与 Web 后端均已实现，并通过离线回归、浏览器 DSP 端到端与整页自动化实测（2026-11-03 补充真实环回延迟实测与延迟诊断面板） | Linux Debug 及声卡静音缓冲验证通过；2026-11-03 修正工作台“没有收到输入数据”提示语义（仅连续 3 秒精确数字静音才提示），并实测本机默认输入为声卡回环时确实采不到吉他；Windows 未构建，两平台真实演奏听感待验证；Android / iOS 新增原生接入，构建与真机验证见文末；macOS 不支持；电脑端浏览器版真机听感待验证（2026-11-03 已完成真实声卡环回延迟实测：本机现状约 134 ms 往返，页面侧唯一有效项 latencyHint:0 省约 8 ms，其余延迟在系统音频图，见「电脑端 Web 效果器」一节） |
 | 手柄线性扳机表情踏板 | 哇音手动模式的位置可由游戏手柄线性扳机连续控制 | 已实现 Linux evdev、Windows XInput 与电脑端浏览器 Gamepad API 三套输入层、量程校准、反向、目标哇音选择及 25 ms 节流写入；本轮补齐 Linux 失败原因提示（未启用／未连接／无权限／没有线性扳机轴）、网页端读取实现与宿主诊断脚本，并实测定位到本机每秒断连的根因是 Flutter debug 下 Dart VM 采样分析器（SIGPROF）打断 `poll(2)` 返回 `EINTR`、被误判为设备断开；2026-11-03 已修复（EINTR 重试、`O_NONBLOCK` 参数修正、EOF/空读区分、重新启用时重置去重缓存、isolate onError/onExit 兜底） | Linux / Windows 桌面与电脑端浏览器；Linux 以合成事件与普通文件验证解析，CLI 探针在 profiler 开启下输出单条 ready（Flydigi Apex 5，量程 0–255）；GUI 端到端已在 profiler 开启的 Debug 构建中验证（打开开关即「已连接：Flydigi Apex 5」，35 秒采样无回落、无 fd 泄漏，关→开 3 次均恢复；真实扳机轴读数待实测）；网页端只有单元测试与注入假手柄的整页实测，未在真实手柄上实测；Windows 未构建、未运行；Android / iOS / macOS 显示不支持说明 |
 | 即兴循环录音 | 可配置内存、覆盖最早音频、三路混音 | 已实现独立启停、试听及 WAV 保存，2026-10-31 修复混音时间轴抖动，自动验证见下节 | 六平台代码接入；Linux/Android/Web 构建通过，各平台设备待验证 |
 | Looper 叠录 | 自由长度叠录第一版 | 已实现录音分层、撤销、踏板映射、输入选择、0–400% 回放音量及 Android / iOS / Linux / Windows 效果链后湿声采集；本轮验证见文末 | Linux Debug、Web Release 构建通过，六平台设备全双工与输入兼容性待验证 |
@@ -30,7 +30,7 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 | 音阶指板 | 本次新增 | 已实现音阶入门及各音阶说明、12 主音、常用音阶、CAGED / 一弦三音与横向 22 品展示 | 六平台共用纯 Flutter 代码；设备显示待验证 |
 | 吉他调音器 | 本次标准调弦范围已实现 | 自动/手动选弦、音高检测、平滑指针、稳定调准反馈及 3 秒丢音保持已实现，静态分析与独立算法/反馈检查通过 | 六平台采集接入；Linux Debug 构建通过，各平台设备采集待验证 |
 
-已实现 Looper、鼓机、调音器、节拍器、音阶指板和和弦练习；实时效果器已接入 Android / iOS / Linux / Windows，包含 Linux 离线验证，真实音频待验证；电脑端浏览器版实时效果器（内置效果器）：DSP 内核与 Web 后端均已实现，静态分析、Node 离线回归、Chrome 浏览器 DSP 端到端与 Flutter Web 整页自动化实测通过，真机听感与实测延迟待验证。哇音的手柄线性扳机表情踏板（Linux / Windows 桌面与电脑端浏览器）已实现；2026-11-03 修复了 Flutter debug 下 Dart VM 采样分析器 SIGPROF 打断 `poll(2)`、`EINTR` 被误判为断开而每秒重连的问题（CLI 探针稳定就绪；GUI 端到端已在 profiler 开启的 Debug 构建中验证，真实扳机读数待实测），并补齐失败原因提示与宿主诊断脚本；2026-11-03 另修正工作台“没有收到输入数据”提示：只有连续 3 秒精确数字静音才提示，文案改为指向输入源/接口，并实测本机系统默认输入被设为声卡回环时采不到吉他。后续工具及优先级待确定。
+已实现 Looper、鼓机、调音器、节拍器、音阶指板和和弦练习；实时效果器已接入 Android / iOS / Linux / Windows，包含 Linux 离线验证，真实音频待验证；电脑端浏览器版实时效果器（内置效果器）：DSP 内核与 Web 后端均已实现，静态分析、Node 离线回归、Chrome 浏览器 DSP 端到端与 Flutter Web 整页自动化实测通过；2026-11-03 完成真实声卡环回延迟实测（本机现状约 134 ms 往返，页面侧唯一有效项是 latencyHint 数字 0，省约 8 ms，其余在 PipeWire 图与 USB/硬件），延迟诊断面板改为区分「浏览器报告输出侧」与「需环回实测的往返延迟」，真机听感待用户验证。哇音的手柄线性扳机表情踏板（Linux / Windows 桌面与电脑端浏览器）已实现；2026-11-03 修复了 Flutter debug 下 Dart VM 采样分析器 SIGPROF 打断 `poll(2)`、`EINTR` 被误判为断开而每秒重连的问题（CLI 探针稳定就绪；GUI 端到端已在 profiler 开启的 Debug 构建中验证，真实扳机读数待实测），并补齐失败原因提示与宿主诊断脚本；2026-11-03 另修正工作台“没有收到输入数据”提示：只有连续 3 秒精确数字静音才提示，文案改为指向输入源/接口，并实测本机系统默认输入被设为声卡回环时采不到吉他。后续工具及优先级待确定。
 
 ## 即兴工作台循环录音（2026-10-29）
 
@@ -277,7 +277,7 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 ## 实时吉他效果器宿主（2026-10-29）
 
 - 已确认目标：吉他输入经效果器插件处理后实时输出，演奏时听到处理后的声音，并显示实时输入/输出电平。
-- 平台范围：首发 Linux 与 Windows；Linux 已完成声卡静音状态下的缓冲/音频图验证，真实演奏与物理回环延迟仍未验证；本轮扩展 Android / iOS 内置效果器，移动端不提供 VST3；电脑端浏览器提供内置效果器（DSP 与 Web 后端均已实现并通过自动化验证；不支持 VST3 与湿声 Looper，见「电脑端 Web 效果器」一节）；macOS 仍显示限制说明。各平台分别记录构建及设备验证状态。
+- 平台范围：首发 Linux 与 Windows；Linux 已完成声卡静音状态下的缓冲/音频图验证，真实演奏与物理回环延迟仍未验证；本轮扩展 Android / iOS 内置效果器，移动端不提供 VST3；电脑端浏览器提供内置效果器（DSP 与 Web 后端均已实现并通过自动化验证；2026-11-03 完成真实环回延迟实测，见「电脑端 Web 效果器」一节；不支持 VST3 与湿声 Looper）；macOS 仍显示限制说明。各平台分别记录构建及设备验证状态。
 - 架构：共用 Flutter 控制界面；Android / iOS 通过 MethodChannel 控制应用内 C++ 引擎（移动端细节见文末）；Linux / Windows 使用独立 JUCE 8.0.12 C++ 宿主进程提供全双工音频与 VST3 插件处理。进程间传控制命令、约 10 Hz 电平状态和 Looper 的有界 PCM 分块；宿主异常退出不直接终止 Flutter，界面显示错误后可重新连接，旧效果链丢失。
 - 插件范围：按绝对路径加载本平台/CPU 架构对应的 VST3 文件或包，最多 8 个串行效果器；同一包有多个类型时取第一个类型。支持单声道或立体声效果器，不含 MIDI、虚拟乐器、VST2、LV2 或跨系统插件桥接。本轮不自动扫描插件目录、不附带第三方音色。
 - 本轮新增：内置 Fuzz、压缩、混响、过载、延迟、哇音六类单块及美式清音、英式清脆、英式摇滚、现代高增益四种箱头，无需外部插件；与 VST3 混合组成最多 8 节串行效果链，可重复添加，每个实例独立参数与处理状态。已实现，验证结果见本节。
@@ -293,7 +293,7 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 - 构建：两个桌面工程随应用编译并安装原生宿主到可执行文件旁；首次需要下载固定版本 JUCE，原生 CMake 要求 3.22+。支持通过 CMake 的 FETCHCONTENT_SOURCE_DIR_JUCE 使用本地源码。本地源码应放在长期保留的目录；若该覆盖路径失效，先用 `cmake -S linux -B build/linux/x64/debug -U FETCHCONTENT_SOURCE_DIR_JUCE` 清除 Linux Debug 缓存覆盖，再由 FetchContent 下载到构建目录的 `_deps/juce-src`。迁移源码路径后，如 juceaide 报 source 不匹配，移出 `_deps/juce-build/tools` 以重建辅助工具缓存。JUCE 及其依赖许可随上游分发，项目发布需按所选许可处理，不改变现有项目的许可声明。
 - 数据：效果器音频在本机处理、不自动保存、不上传；工作台整段录音可手动保存混音；第一版不持久化效果链、插件参数或设备设置，向 Looper 传送效果链后、监听音量前的 48 kHz 单声道 PCM；其他工具回放引擎保持独立。工作台允许同时使用效果器、鼓机与 Looper；驱动独占或设备权限可能导致打开失败，显示实际错误，不承诺所有设备支持同时使用。
 - 构建恢复验证（2026-10-28）：清除指向已不存在 `/tmp` 目录的 JUCE 源码覆盖，重新下载依赖并重建 juceaide 缓存后，Flutter 3.44.0 Linux Debug 完整构建通过；本次未重新验证界面运行与音频，Windows 未验证。
-- 实现状态：六类内置单块、四种箱头、实时参数与可编辑混合效果链已实现；既有控制界面、进程协议、原生效果链及双平台构建接入已实现；Linux Debug 构建通过，Windows 尚未构建，两平台均未完成真实设备验证。电脑端浏览器版的 DSP worklet 与 Flutter Web 后端（`lib/features/effects/effects_backend_web.dart`）及条件导出均已落盘，并通过静态分析、Node 离线回归、Chrome 浏览器 DSP 端到端与整页自动化实测；真机听感与实测延迟待验证。
+- 实现状态：六类内置单块、四种箱头、实时参数与可编辑混合效果链已实现；既有控制界面、进程协议、原生效果链及双平台构建接入已实现；Linux Debug 构建通过，Windows 尚未构建，两平台均未完成真实设备验证。电脑端浏览器版的 DSP worklet 与 Flutter Web 后端（`lib/features/effects/effects_backend_web.dart`）及条件导出均已落盘，并通过静态分析、Node 离线回归、Chrome 浏览器 DSP 端到端与整页自动化实测；2026-11-03 完成真实声卡环回延迟实测（现状往返约 134 ms，`latencyHint: 0` 省约 8 ms，其余在系统音频图），诊断面板已区分浏览器报告的输出侧延迟与需实测的往返延迟；真实吉他听感待用户验证。
 - 验收：六类内置单块与四种箱头无需外部文件即可添加，重复实例参数与尾音独立；改变顺序实际改变处理结果，内置与 VST3 共用八节上限；进入自动监听，参数与结构监听中均可编辑；真实声卡输入→插件→输出可听辨，选中非首个输入通道也能正常采集；旁通、参数与顺序变化生效；停止/离页不再出声；插件失败可恢复；小屏大字号可读；用回环测量往返延迟和持续运行稳定性。Windows 与 Linux 分别验证。
 - 待确定：真实插件兼容清单、设备性能对应的延迟目标；未来是否持久化预设、自动扫描。
 - 验证结果（2026-10-28）：静态分析与完整 Flutter 测试 71 项通过，新增效果器组件测试覆盖加载/监听/旁通/停止/离页释放、小屏双倍字号深色布局和失败恢复；首页六入口可达回归通过。Linux Debug 与 Web Release 构建通过，Web 当时（2026-10-28）仅显示不支持说明。Linux 打包宿主使用真实 VST3 测试插件完成离线处理、串联、旁通、排序/移除、非首输入/输出通道和停止静音检查；实际 Dart 后端完成进程通信、参数窗口、无效插件后的效果链保留及关闭释放检查。测试步骤见 native/effects_host/README.md。Windows 未构建；Linux / Windows 第三方插件、真实吉他与声卡监听、往返延迟及长期稳定性均待验证。
@@ -415,23 +415,24 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 - 修复：每路音源在录音首块锚定相位，之后按实际录到的输入帧推进；对引擎/输入时钟漂移做每块不超过 0.2%（约 3 音分）的缓慢纠偏；引擎位置跳变超过 100 ms（seek/重启/循环回绕）时直接按报告位置重新对齐。prepare/play/playAt/silence/clear/dispose 都会重置锚点。首块锚定保留最多一个缓冲（约 10.7 ms）的常数延迟，不做自动延迟补偿。
 - 验证（2026-10-31）：新增 2 项回归测试——模拟 512 帧量化位置叠加 16–24 ms 块长/到达抖动，断言录制时间轴逐样本连续推进（修复前实测最大相位跳变 576 帧约 12 ms，修复后断言 <8 帧约 0.17 ms）；以及位置跳变 1 秒时在下一块内重新对齐。`flutter analyze` 无问题，完整 109 项测试通过。真机声卡听感、固定对齐与长期漂移仍需设备验证。
 
-### 电脑端 Web 效果器（电脑端浏览器，设计 2026-11-01，验证回填 2026-11-02）
+### 电脑端 Web 效果器（电脑端浏览器，设计 2026-11-01，验证回填 2026-11-02，延迟实测 2026-11-03）
 
 - 已确认范围：仅电脑端浏览器提供内置效果器（桌面 Chrome / Edge 为目标环境；移动端浏览器不提供，页面提示「仅电脑端浏览器支持」）。内置 Fuzz、压缩、混响、过载、延迟、哇音六类单块与美式清音、英式清脆、英式摇滚、现代高增益四种箱头，合计 10 种；最多 8 节串联，可调参、旁通、拖动排序、查看输入 / 输出电平并调节输出音量。界面复用现有拟物单块效果器板。
 - 明确不支持：网页端不加载 VST3 插件，也没有 VST3 参数窗口；网页端不提供声卡设置窗口与输入通道选择；网页端不提供湿声 Looper——网页端 Looper 录的是干声（原始输入），不是效果链处理后的声音。
 - 实现方式：Flutter Web 前端 + Web Audio AudioWorklet。DSP 内核由原生 C++/JUCE 内置效果 1:1 移植为 JavaScript，运行在 AudioWorklet 音频线程；主线程与 worklet 通过端口消息协议同步（添加 / 移除 / 排序 / 旁通 / 参数 / 输出音量 / 清空），worklet 约每 100 ms 上报一次电平。
-- 音频链路：getUserMedia（关闭自动增益、降噪与回声消除，单声道）→ MediaStreamAudioSourceNode → AudioWorkletNode('guitarbook-effects')（双声道输出）→ 音频上下文默认输出，即系统默认音频设备。输出音量在 worklet 内实现（乘在输出样本上），电平表反映最终输出。
+- 音频链路：getUserMedia（关闭自动增益、降噪与回声消除，单声道；浏览器支持时再请求采样率对齐上下文与 `latency` 理想值，仅用于减少采集边界重采样，Linux 上实测无收益）→ MediaStreamAudioSourceNode → AudioWorkletNode('guitarbook-effects')（双声道输出）→ 音频上下文默认输出，即系统默认音频设备。AudioContext 以数字 `latencyHint: 0` 创建，让 Chrome 取最小内部缓冲；输出音量在 worklet 内实现（乘在输出样本上），电平表反映最终输出。
 - 权限与前置条件：需要安全上下文（HTTPS 或 localhost）；需要麦克风授权；浏览器要求用户手势后才能解锁音频，因此必须先点击「开始监听」再授权麦克风，失败时显示可重试的中文错误（浏览器未授权麦克风 / 需要 HTTPS 或 localhost / 需要用户手势后再点击开始监听），不静默失败。页面隐藏或暂停时停止监听并释放轨道与音频上下文，再次开始时保留已编辑的效果链。
 - 限制（与原生端的差异）：
-  - 延迟由浏览器 I/O 缓冲决定，典型 20–40 ms，高于原生 128 帧（约 16 ms）的水平；蓝牙耳机不作低延迟验收环境。
+  - 延迟由浏览器与系统音频栈决定。2026-11-03 在本机（Focusrite Scarlett Solo 4th Gen + PipeWire 1.6.2，quantum 1024）用硬件 Loopback 实测“播放 → 采集”往返 134.3 ms（两次独立运行 141.1 / 134.3 ms，跨启动相位差约 6.8 ms）；其中浏览器只报出输出侧 baseLatency 10.7 ms 与采集 latency 21.3 ms，`outputLatency` 在 Linux Chrome 恒为 0，其余约 102 ms 在 PipeWire 图（约 5 个 quantum）与 USB/硬件。页面侧唯一有效的降低手段是 AudioContext 数字 `latencyHint: 0`（baseLatency 从 10.7 降到 2.7 ms，往返省约 8 ms）；再往下需要调系统音频栈（如减小 PipeWire quantum），不是效果器代码能控制。蓝牙耳机不作低延迟验收环境。
   - 输出只能走系统默认音频设备，无法在页面内切换输出设备。
   - 无法选择声卡输入通道，输入由浏览器与系统决定。
-  - 缓冲大小由浏览器决定，网页端不提供声卡缓冲设置（缓冲设置命令不真正生效）。
+  - 缓冲大小由浏览器决定，网页端不提供声卡缓冲设置（缓冲设置命令不真正生效）；「声卡设置与延迟诊断」在网页端改为说明这一点，并显示浏览器报告的输出侧延迟构成（图内缓冲 + 设备输出）、采集采样率是否与上下文一致，以及“往返延迟需环回实测”的提示，不再显示原生的驱动报告 / 报告合计 / JACK 建议。
   - 页面刷新或崩溃会丢失整条效果链；网页端无法像原生那样重新连接宿主进程。
 - 一致性说明：网页端混响为 Freeverb 结构等效实现，与原生 JUCE Reverb 音色不完全一致（结构等效，未做逐样本对齐），这是已知偏差。其余内置效果的参数范围、默认值与逐样本处理公式与原生 `native/effects_host/builtin_effect.h` 对齐，参数平滑按 JUCE SmoothedValue 等价实现（ramp 长度约 20 ms），每个实例独立持有状态。
-- 实现状态：设计已定并已实现。DSP worklet 已落盘（JavaScript 移植内核、10 种内置效果、最多 8 节链、主线程↔worklet 端口协议）；Node 离线回归脚本 `tool/effects_worklet_test.js` 已补齐；Flutter Web 后端（`lib/features/effects/effects_backend_web.dart`）、条件导出与页面文案适配均已落盘（尚未提交）。静态分析、离线回归、浏览器 DSP 端到端与整页自动化实测已通过；真实吉他 + 真实声卡的手工听感、实测往返延迟与 Edge 浏览器仍待验证。
+- 实现状态：设计已定并已实现。DSP worklet 已落盘（JavaScript 移植内核、10 种内置效果、最多 8 节链、主线程↔worklet 端口协议）；Node 离线回归脚本 `tool/effects_worklet_test.js` 已补齐；Flutter Web 后端（`lib/features/effects/effects_backend_web.dart`）、条件导出与页面文案适配均已落盘（尚未提交）。静态分析、离线回归、浏览器 DSP 端到端与整页自动化实测已通过；2026-11-03 完成真实声卡环回延迟实测，并把后端改为如实上报输出侧延迟构成（baseLatency / outputLatency / 采集采样率与声道数、`latencyScope`）与 `latencyHint: 0`；真实吉他 + 真实声卡的手工听感与 Edge 浏览器仍待验证。
 - 验证结果（2026-11-01 / 2026-11-02 回填）：DSP 内核两层验证均已通过。① Node 离线回归 `node tool/effects_worklet_test.js` 9 / 9 通过（exit code 0），其中 8 项断言与原生 `native/effects_host/builtin_effect_tests.h` 的数值一致：静音输入保持静音；44100 / 48000 / 96000 Hz 下 10 种效果参数取 0 / 1 来回 40 块时输出全为有限值；箱头参考渲染幅度 0.176011、四款箱头两两最小波形差 Σ|Δ|=150.2488、六个参数各自改变输出、主音量为 0 时静音、两独立实例输出一致；哇音幅度 0.085923、自动扫频 Σ|Δ|=129.5655、speed 与 depth 各自有效、深度为 0 时与手动差 0、level 为 0 时静音、mix=0 时左声道第 0 采样为 0.5 而右声道恒 0；延迟全湿时第 0 采样为 0、第 960 采样为 0.5、第 1920 采样为 0.25；压缩器末样本 0.14953487812212235（原生期望 0.149535±0.001）；混响 mix=0 时第 0 采样为 0.5、mix=1 时 |sample0| < 0.0001 且 [1000, 4096) 尾巴峰值 1.434e-2；新建延迟实例不继承其他实例的尾巴。第 9 项为 worklet 消息协议自检（越界保护、电平上报、reset）。② 真实 Chrome 156 无头环境端到端复核（OfflineAudioContext + 真 AudioWorkletNode）38 / 38 通过，含 worklet 集成项：默认延迟干湿 0.375、一次回声 0.125、二次回声 0.04375、旁通与移除时直通 0.5、gain=0.5 输出 0.1875、非法 kind 返回 error。`web/effects_worklet.js` 已核对：无 import、无 fetch、无 DOM 依赖，并在 AudioWorkletGlobalScope 中注册 `guitarbook-effects`。
 - Web 侧验证结果（2026-11-02）：① 静态分析 `dart analyze lib` 通过（No issues found!）；完整 Flutter 测试 151 项全部通过（工作台布局测试中“不支持平台”说明文案断言随网页端支持说明同步更新）；`flutter build web --release` 构建通过，产物 `build/web/` 含 `effects_worklet.js`（42,022 字节，按 `<base href="/">` 同源加载）。② 整页自动化实测：以真实 `build/web` 产物 + 桌面 Chrome 156（headless，假麦克风设备、假授权）运行，两阶段共 29 / 29 项断言通过。阶段 A「首页点击进入 → 自动开始监听」：进入效果器页后自动建立音频链路，`AudioContext` 状态 running、采样率 48000 Hz，`getUserMedia` 约束实测为 `{"audio":{"echoCancellation":false,"autoGainControl":false,"noiseSuppression":false,"channelCount":1}}`（自动增益、降噪、回声消除关闭且单声道），创建 `AudioWorkletNode('guitarbook-effects')`，worklet 电平上报 43 次，假设备输入峰值 1.1298、输出峰值 0.5649（比值精确 0.5，等于输出音量 50%），页面显示「正在监听」，从效果库添加「过载」后「效果链 · 1/8」、信号链显示「吉他输入 → 过载 Overdrive → 输出（右进左出）」、旋钮「驱动」「音色」正常渲染，无未捕获异常、worklet 未上报 error。阶段 B「无用户激活进入 → 手势提示 → 点击开始监听」：页面先给出中文提示「浏览器要求用户手势：请再点击一次「开始监听」。」且此时未打开麦克风、未开始处理（getUserMedia 0 次、电平上报 0 次）；真实点击「开始监听」后音频链路跑通（电平上报 59 次、输出 = 输入 × 50%）。③ 实测发现的行为差异：`_start()` 先建 `AudioContext` 预加载 worklet、再检查用户激活状态并抛手势错误（`lib/features/effects/effects_backend_web.dart:37`），因此「从首页点击进入」已产生粘性用户激活时页面会自动开始监听成功；只有页面从未被用户激活过的入口才会看到手势提示。自动化环境的 `baseLatency` 10.7 ms、`outputLatency` 54–85 ms 属假音频设备的偏高值，不能作为真机延迟基线。尚未验证：真实吉他与真实声卡的手工听感、真机往返延迟实测、Edge 浏览器、页面隐藏 / 暂停后停止监听并释放麦克风的整页行为（待验证）。
+- 延迟实测与改动验证（2026-11-03）：① 方法：Chrome 156 headless 加载 `tool/web_latency_probe.html`（本沙箱内 Chrome 访问 http 被拦，改用 file:// + `--allow-file-access-from-files`），经真实 `AudioWorkletNode('guitarbook-effects')` → destination 播放 16 个 1 kHz / 12 ms 脉冲（丢前 3 个、16/16 检出），同时 getUserMedia 采集 Scarlett 4th Gen 硬件 Loopback，worklet 用音频时钟 `currentTime` 记录到达时刻，差值即“输出 → 硬件环回 → 采集”往返；每组 3 次、同实例内可重复到 0.001 ms。② 结果：A 现状（`latencyHint:'interactive'`）往返 134.271 ms（另一次独立启动 141.062 ms），baseLatency 10.667 ms、outputLatency 0、采集 latency 21.333 ms、采样率 48000；B 追加采集 `sampleRate:48000` 与 C 追加 `latency:0` 均无变化；D 改用数字 `latencyHint: 0` 为 126.271 ms（baseLatency 2.667 ms，省 8.0 ms）；E 图内对照（假设备）0.104 ms，说明 DSP 链路本身约 0.1 ms、测量装置时钟对齐正确。③ 分析与实现：DSP 与页面处理不是瓶颈，页面侧唯一有效项是 `latencyHint: 0`，已设为默认（`lib/features/effects/effects_backend_web.dart`）；其余约 102 ms 在 PipeWire 图（quantum 1024 ≈ 21.33 ms，约 5 个）与 USB/硬件 Loopback，需调系统音频栈（如 `pw-metadata -n settings 0 clock.quantum 128`），不是改效果器代码能解决。④ 后端与页面：`_status()` 新增 `inputChannels` / `outputChannels` / `latencyScope: 'output-only'` / `baseLatencyMs` / `captureSampleRate` / `captureChannels`，`latencyMs` 明确只是输出侧合计；诊断面板对网页端隐藏缓冲帧选择、驱动报告、报告合计、JACK 建议与“报告延迟偏高”提示，改为显示输出侧构成、采集采样率不一致时的重采样提示，以及有线输出 / 调小 PipeWire quantum 的建议。⑤ 验证：`flutter analyze lib test` 无问题；`flutter test test/effects_page_test.dart` 18 项通过（新增 2 项覆盖网页端诊断文案与采样率不一致提示），完整 `flutter test` 209 项通过（基线 207 项）；`flutter build web --release` 通过；整页回归（`node tool/check_web_effects_page.mjs`）本轮未复跑：本沙箱内 Chrome 访问 127.0.0.1 被拦（探针也改用 file:// 才跑通），脚本已补 `--no-proxy-server` 以防系统代理拦截，并给导航加了 20 秒超时（此前在受限环境会无限挂住，现在会明确报错）；诊断面板改动由上述页面测试覆盖，真实整页回归仍待在常规桌面会话中复核；测量记录（方法、环境、每组汇总与每轮统计）随仓库提交在 `docs/latency_measurement_2026-11-03.json`，完整逐脉冲原始数据由脚本写入本地 `.tools/latency_results.json`，复现命令 `node tool/check_web_latency.mjs --runs=3`。
 - 验收条件：
 
 | 验收条件 | 当前状态 |
@@ -448,7 +449,7 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 | `dart analyze` 无 error | 已验证（2026-11-02，`dart analyze lib` 输出 No issues found!；`flutter build web --release` 构建通过） |
 
 - 可复现检查：`node tool/effects_worklet_test.js`（DSP 离线回归）、`node tool/check_web_effects_dsp.mjs`（真实浏览器 DSP 回归，页面在 `tool/web_effects_dsp_check.html`）、`node tool/check_web_effects_page.mjs`（整页回归，需先 `flutter build web --release`，脚本自行托管 `build/web` 产物并用无头 Chrome 驱动真实页面）。
-- 待确定：网页端实测往返延迟的测量方法与目标值；网页端是否需要独立于原生端的预设保存（本版按原生第一版不持久化效果链与参数）；浏览器之间在采样率协商与输入声道数上的差异。
+- 待确定：网页端实测往返延迟的可接受目标值（2026-11-03 已在真实声卡上实测约 134 ms，页面侧唯一能省的是约 8 ms 的 `latencyHint: 0`，目标值仍需按演奏体感与不同系统的音频栈确定）；网页端是否需要独立于原生端的预设保存（本版按原生第一版不持久化效果链与参数）；浏览器之间在采样率协商与输入声道数上的差异（Edge 未验证）。
 
 ### 工作台“没有收到输入数据”诊断（2026-11-03）
 

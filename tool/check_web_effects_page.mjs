@@ -57,6 +57,8 @@ const chrome = spawn(CHROME, [
   '--no-sandbox',
   '--disable-gpu',
   '--disable-dev-shm-usage',
+  // 某些桌面环境给 Chrome 配了系统代理，会把 127.0.0.1 也送去代理，页面永远加载不完。
+  '--no-proxy-server',
   '--window-size=1400,2200',
   '--use-fake-device-for-media-stream',
   '--use-fake-ui-for-media-stream',
@@ -321,9 +323,32 @@ try {
     check(prefix + '：worklet 未上报 error', probe.workletErrors.length === 0, JSON.stringify(probe.workletErrors));
   };
 
+  // 导航并等待页面可交互；在受限沙箱里 Chrome 可能根本连不上 127.0.0.1，
+  // 甚至 Page.navigate 本身都不返回，所以整体加 20 秒超时并给出可执行的报错。
+  const navigate = async (url) => {
+    const timer = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('页面在 20 秒内没有加载完成：' + url +
+        '（若在受限沙箱内运行，Chrome 可能无法访问 127.0.0.1；改用常规桌面会话或 file:// 探针）')), 20000);
+    });
+    const load = (async () => {
+      const nav = await send('Page.navigate', { url });
+      if (nav.errorText) throw new Error('页面导航失败：' + nav.errorText);
+      const started = Date.now();
+      while (Date.now() - started < 19000) {
+        await sleep(250);
+        try {
+          const ready = await evaluate('document.readyState');
+          if (ready === 'complete' || ready === 'interactive') return;
+        } catch {}
+      }
+    })();
+    try { await Promise.race([load, timer]); }
+    catch (err) { load.catch(() => {}); throw err; }
+  };
+
   // ---------- 阶段 A：从首页真实点击进入效果器页 ----------
   console.log('\n===== 阶段 A：首页点击进入 → 自动开始监听 =====');
-  await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/index.html` });
+  await navigate(`http://127.0.0.1:${PORT}/index.html`);
   await waitFlutter();
   await realClick('实时效果器');
   check('A：进入「实时效果器」页', await pageHas('效果链 · 0/8')(), '');
