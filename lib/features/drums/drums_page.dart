@@ -113,17 +113,23 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
   final _looperKey = GlobalKey();
   final _drumKey = GlobalKey();
   List<List<bool>> _hits = [];
-  final _muted = [false, false, false];
+  final _muted = [false, false, false, false, false];
   int _swing = 0;
   bool _capturing = false;
   int _stepPage = 0;
   String _preset = '摇滚';
+  DrumMeter _meter = const DrumMeter(4, 4);
 
   void _load(DrumPreset preset) {
     _preset = preset.name;
+    _meter = preset.meter;
     _swing = preset.swing;
-    _hits = [for (final row in preset.hits) List.generate(16, row.contains)];
-    _muted.fillRange(0, 3, false);
+    _hits = [
+      for (final row in preset.hits)
+        List.generate(preset.meter.steps, row.contains),
+    ];
+    _muted.fillRange(0, drumTrackNames.length, false);
+    _stepPage = 0;
   }
 
   @override
@@ -143,7 +149,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
       ..addListener(_refresh);
     _controller = MetronomeController(
       _tap(widget.audio ?? createMetronomeAudio()),
-      patternBuilder: (bpm) => renderDrums(bpm, _hits, _muted, _swing),
+      patternBuilder: (bpm) =>
+          renderDrums(bpm, _hits, _muted, _swing, meter: _meter),
     )..addListener(_refresh);
     WidgetsBinding.instance.addObserver(this);
   }
@@ -151,7 +158,11 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
   void _refresh() => setState(() {});
   void _edit(VoidCallback change) {
     change();
-    _controller.configure();
+    // 拍号决定拍点数量与每拍长度，改动后要让节拍器按新拍号高亮。
+    _controller.configure(
+      beats: _meter.beats,
+      beatDenominator: _meter.denominator,
+    );
   }
 
   @override
@@ -210,7 +221,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                     content: const SingleChildScrollView(
                       child: Text(
                         '先选一个鼓机律动，点击开始伴奏；再用 Looper 录下吉他并逐层叠录。\n\n'
-                        '点击鼓件名称可静音，点击格子编辑十六分音符。修改鼓机参数会从首拍重启。窄屏用拍号分页查看全部鼓点。\n\n'
+                        '点击鼓件名称可静音，点击格子编辑十六分音符。修改鼓机参数会从首拍重启。窄屏用分页查看全部鼓点。\n\n'
+                        '拍号可选 4/4、3/4、2/4、5/4、6/8、7/8，切换后自动载入该拍号的默认节奏，速度与音量保持不变。x/4 拍号一拍是四分音符，x/8 拍号一拍是八分音符，网格始终按十六分音符划分，摇摆会把每个八分音符的后半拍往后拖。\n\n'
                         '录音与鼓机独立循环，不自动对拍。下方效果器会静音检测引擎和声卡，手动开始监听；鼓机音量、Looper 回放音量与效果器输出音量可独立调节。Android / iOS / Linux / Windows 的 Looper 录入效果器处理后的声音，需先开始监听并设为 48 kHz；其他平台录原始输入。请用耳机避免伴奏串入录音。\n\n'
                         '顶部“即兴录音”可录下三路混音，内存满后覆盖最早片段；停止后可试听或保存 WAV。进入后台会停止播放与采集；离开工作台清空未保存录音和设置。声音受系统音量影响，蓝牙可能增加延迟。',
                       ),
@@ -426,6 +438,49 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
     ],
   );
 
+  /// 拍号选择：切换后载入该拍号的默认预设，速度与音量保持不变。
+  Widget _meterChips() => Wrap(
+    spacing: 8,
+    runSpacing: 6,
+    children: [
+      for (final meter in drumMeters)
+        ChoiceChip(
+          key: ValueKey('drum-meter-${meter.label}'),
+          label: Text(meter.label),
+          selected: _meter == meter,
+          showCheckmark: false,
+          onSelected: (selected) {
+            // 再点一次当前拍号不改内容，避免丢掉用户已经编辑的节奏。
+            if (!selected || _meter == meter) return;
+            _edit(() => _load(drumDefaultPreset(meter)));
+          },
+        ),
+    ],
+  );
+
+  /// 拍点指示条，段数与当前拍号的拍数一致。
+  Widget _beatBar(BuildContext context) {
+    final c = _controller;
+    final colors = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        for (var beat = 1; beat <= _meter.beats; beat++)
+          Expanded(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              height: 5,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: c.running && !c.preparing && c.beat == beat
+                    ? colors.primary
+                    : colors.surfaceContainerHighest,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _drumDeck(BuildContext context, {bool compact = false}) {
     final c = _controller;
     final colors = Theme.of(context).colorScheme;
@@ -472,15 +527,20 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-              const Text('4/4', style: TextStyle(fontWeight: FontWeight.w700)),
+              Text(
+                _meter.label,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
             ],
           ),
           SizedBox(height: compact ? 6 : 16),
+          _meterChips(),
+          SizedBox(height: compact ? 6 : 12),
           Wrap(
             spacing: 8,
             runSpacing: 6,
             children: [
-              for (final preset in drumPresets)
+              for (final preset in drumPresetsFor(_meter))
                 ChoiceChip(
                   label: Text(preset.name),
                   selected: _preset == preset.name,
@@ -531,29 +591,13 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
           _drumVolume(),
           _grid(context, compact: compact),
           SizedBox(height: compact ? 6 : 16),
-          Row(
-            children: [
-              for (var beat = 1; beat <= 4; beat++)
-                Expanded(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 3),
-                    height: 5,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      color: c.running && !c.preparing && c.beat == beat
-                          ? colors.primary
-                          : colors.surfaceContainerHighest,
-                    ),
-                  ),
-                ),
-            ],
-          ),
+          _beatBar(context),
           SizedBox(height: compact ? 6 : 12),
           Text(
             c.preparing
                 ? '正在准备声音…'
                 : c.running
-                ? '第 ${c.beat} / 4 拍'
+                ? '第 ${c.beat} / ${_meter.beats} 拍'
                 : '$_preset · 准备就绪',
             style: Theme.of(context).textTheme.labelLarge,
           ),
@@ -610,7 +654,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                 value: _preset,
                 underline: const SizedBox(),
                 items: [
-                  for (final preset in drumPresets)
+                  for (final preset in drumPresetsFor(_meter))
                     DropdownMenuItem(
                       value: preset.name,
                       child: Text(preset.name),
@@ -619,7 +663,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                     const DropdownMenuItem(value: '自定义', child: Text('自定义')),
                 ],
                 onChanged: (name) {
-                  for (final preset in drumPresets) {
+                  for (final preset in drumPresetsFor(_meter)) {
                     if (preset.name == name) _edit(() => _load(preset));
                   }
                 },
@@ -661,14 +705,18 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
             ],
           ),
           const SizedBox(height: 6),
+          _meterChips(),
+          const SizedBox(height: 6),
           _drumVolume(),
           _grid(context, compact: true),
+          const SizedBox(height: 6),
+          _beatBar(context),
           const SizedBox(height: 6),
           Text(
             c.preparing
                 ? '正在准备声音…'
                 : c.running
-                ? '第 ${c.beat} / 4 拍'
+                ? '第 ${c.beat} / ${_meter.beats} 拍'
                 : '$_preset · 准备就绪',
             style: Theme.of(context).textTheme.labelMedium,
           ),
@@ -768,19 +816,30 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
     builder: (context, constraints) {
       final colors = Theme.of(context).colorScheme;
       final scaled = MediaQuery.textScalerOf(context).scale(14);
-      final count = constraints.maxWidth >= 650
-          ? 16
+      final meter = _meter;
+      final stepsPerBeat = meter.stepsPerBeat;
+      // 每一页按整拍切分，翻页时不会把一拍拆到两页。
+      final beatsPerPage = constraints.maxWidth >= 650
+          ? 4
           : constraints.maxWidth >= 410
-          ? 8
-          : 4;
-      final pages = 16 ~/ count;
+          ? 2
+          : stepsPerBeat == 2
+          ? 2
+          : 1;
+      final pageBeats = beatsPerPage < meter.beats ? beatsPerPage : meter.beats;
+      final count = pageBeats * stepsPerBeat;
+      final pages = (meter.steps + count - 1) ~/ count;
       final page = _stepPage.clamp(0, pages - 1);
       final start = page * count;
+      // 末页可能不满一页，列数对齐到实际步数即可。
+      final end = start + count > meter.steps ? meter.steps : start + count;
       final labelWidth = scaled > 21 ? 80.0 : 64.0;
       final palette = [
         const Color(0xFFCC8749),
         const Color(0xFF4B9E96),
         const Color(0xFF8A83BF),
+        const Color(0xFFC0636F),
+        const Color(0xFF6F9BC0),
       ];
       final cellHeight = scaled > 21
           ? 56.0
@@ -802,11 +861,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                         padding: const EdgeInsets.symmetric(horizontal: 3),
                         child: ChoiceChip(
                           key: ValueKey('drum-page-$i'),
-                          label: Text(
-                            count == 4
-                                ? '${i + 1}'
-                                : '${i * 2 + 1}–${i * 2 + 2}',
-                          ),
+                          label: Text(_pageLabel(i, pageBeats)),
                           selected: page == i,
                           showCheckmark: false,
                           onSelected: (_) => setState(() => _stepPage = i),
@@ -819,13 +874,13 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
           Row(
             children: [
               SizedBox(width: labelWidth),
-              for (var i = start; i < start + count; i++)
+              for (var i = start; i < end; i++)
                 Expanded(
                   child: Center(
                     child: Text(
-                      i % 4 == 0 ? '${i ~/ 4 + 1}' : ['e', '&', 'a'][i % 4 - 1],
+                      _stepLabel(i),
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        fontWeight: i % 4 == 0
+                        fontWeight: i % stepsPerBeat == 0
                             ? FontWeight.w800
                             : FontWeight.normal,
                         color: colors.onSurfaceVariant,
@@ -836,7 +891,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
             ],
           ),
           const SizedBox(height: 6),
-          for (var track = 0; track < 3; track++)
+          for (var track = 0; track < drumTrackNames.length; track++)
             Row(
               children: [
                 SizedBox(
@@ -853,7 +908,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                       onPressed: () =>
                           _edit(() => _muted[track] = !_muted[track]),
                       child: Text(
-                        ['底鼓', '军鼓', '踩镲'][track],
+                        drumTrackNames[track],
                         style: TextStyle(
                           decoration: _muted[track]
                               ? TextDecoration.lineThrough
@@ -863,18 +918,18 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-                for (var step = start; step < start + count; step++)
+                for (var step = start; step < end; step++)
                   Expanded(
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(
-                        step % 4 == 0 ? 4 : 2,
+                        step % stepsPerBeat == 0 ? 4 : 2,
                         3,
                         2,
                         3,
                       ),
                       child: Semantics(
                         button: true,
-                        label: '${['底鼓', '军鼓', '踩镲'][track]} 第 ${step + 1} 步',
+                        label: '${drumTrackNames[track]} 第 ${step + 1} 步',
                         toggled: _hits[track][step],
                         child: Tooltip(
                           message: '第 ${step + 1} 步',
@@ -892,7 +947,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                                   color:
                                       _controller.running &&
                                           !_controller.preparing &&
-                                          _controller.beat == step ~/ 4 + 1
+                                          _controller.beat ==
+                                              step ~/ stepsPerBeat + 1
                                       ? colors.primary
                                       : colors.outlineVariant,
                                 ),
@@ -928,4 +984,22 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
       );
     },
   );
+
+  /// 页签文案用拍号区间标记当前页覆盖哪几拍。
+  String _pageLabel(int index, int pageBeats) {
+    final first = index * pageBeats + 1;
+    final last = (index + 1) * pageBeats > _meter.beats
+        ? _meter.beats
+        : (index + 1) * pageBeats;
+    return first == last ? '$first' : '$first–$last';
+  }
+
+  /// 步进标签：四分音符拍号用 1 / e / & / a，八分音符拍号用拍号数字与 e。
+  String _stepLabel(int step) {
+    final stepsPerBeat = _meter.stepsPerBeat;
+    if (stepsPerBeat == 2) {
+      return step % 2 == 0 ? '${step ~/ 2 + 1}' : 'e';
+    }
+    return step % 4 == 0 ? '${step ~/ 4 + 1}' : ['e', '&', 'a'][step % 4 - 1];
+  }
 }

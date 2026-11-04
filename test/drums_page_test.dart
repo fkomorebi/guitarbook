@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guitarbook/features/drums/drum_pattern.dart';
 import 'package:guitarbook/features/drums/drums_page.dart';
 import 'package:guitarbook/features/metronome/metronome_audio.dart';
 import 'package:guitarbook/features/metronome/metronome_pattern.dart';
@@ -81,6 +82,65 @@ void main() {
     await tester.pump(const Duration(milliseconds: 20));
     expect(audio.playing, isTrue);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
+
+  testWidgets('switching meter swaps presets and beat display', (tester) async {
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final audio = FakeDrumAudio();
+    await tester.pumpWidget(
+      MaterialApp(theme: ThemeData.dark(), home: DrumsPage(audio: audio)),
+    );
+    await tester.pump();
+    // 4/4 的预设可见，6/8 的预设不可见。
+    expect(find.text('布鲁斯'), findsOneWidget);
+    expect(find.text('六八摇摆'), findsNothing);
+    await tester.ensureVisible(find.byKey(const ValueKey('drum-meter-6/8')));
+    await tester.tap(find.byKey(const ValueKey('drum-meter-6/8')));
+    await tester.pump();
+    expect(find.text('六八摇摆'), findsOneWidget);
+    expect(find.text('布鲁斯'), findsNothing);
+    // 标题右侧显示当前拍号。
+    expect(find.text('6/8'), findsWidgets);
+    await tester.ensureVisible(find.text('开始伴奏'));
+    await tester.tap(find.text('开始伴奏'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(audio.pattern!.beats, 6);
+    expect(find.text('第 1 / 6 拍'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
+
+  testWidgets('narrow large text layout stays inside every meter', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+          child: DrumsPage(audio: FakeDrumAudio()),
+        ),
+      ),
+    );
+    await tester.pump();
+    for (final meter in drumMeters) {
+      final chip = find.byKey(ValueKey('drum-meter-${meter.label}'));
+      await tester.ensureVisible(chip);
+      await tester.tap(chip);
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: meter.label);
+    }
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
   });

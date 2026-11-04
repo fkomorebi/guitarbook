@@ -18,6 +18,12 @@ class MetronomeController extends ChangeNotifier {
   bool _disposed = false;
   int bpm = 100;
   int beats = 4;
+
+  /// 拍分母：4 表示一拍是一个四分音符，8 表示一拍是一个八分音符。
+  ///
+  /// bpm 恒为每分钟四分音符数，只有拍号才决定一拍有多长；节拍器页面保持默认的 4。
+  int beatDenominator = 4;
+
   int beat = 0;
   bool sound = true;
   bool accent = true;
@@ -115,7 +121,7 @@ class MetronomeController extends ChangeNotifier {
       if (!_current(generation)) return;
       try {
         final position = sound ? _audio.position : _visualClock.elapsed;
-        final next = (position.inMicroseconds * bpm ~/ 60000000) % beats + 1;
+        final next = _beatIndex(position) % beats + 1;
         if (next != beat) {
           beat = next;
           notifyListeners();
@@ -125,6 +131,13 @@ class MetronomeController extends ChangeNotifier {
       }
     });
   }
+
+  /// 播放位置落在第几拍（从 0 开始）。
+  ///
+  /// bpm 是每分钟四分音符数，一拍的长度按拍分母缩放：四分音符一拍为 60/bpm 秒，
+  /// 八分音符一拍减半，这样 6/8、7/8 的拍点能落在正确的位置。
+  int _beatIndex(Duration position) =>
+      position.inMicroseconds * bpm * beatDenominator ~/ 240000000;
 
   void _fail() {
     stop();
@@ -145,9 +158,19 @@ class MetronomeController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void configure({int? bpm, int? beats, bool? sound, bool? accent}) {
+  void configure({
+    int? bpm,
+    int? beats,
+    int? beatDenominator,
+    bool? sound,
+    bool? accent,
+  }) {
     this.bpm = (bpm ?? this.bpm).clamp(30, 240);
     this.beats = (beats ?? this.beats).clamp(1, 12);
+    this.beatDenominator = (beatDenominator ?? this.beatDenominator).clamp(
+      2,
+      8,
+    );
     this.sound = sound ?? this.sound;
     this.accent = accent ?? this.accent;
     if (running) {
