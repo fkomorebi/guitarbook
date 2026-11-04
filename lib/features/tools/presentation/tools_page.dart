@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../tuner/tuner_page.dart';
-import '../../effects/effects_page.dart';
 import '../../drums/drums_page.dart';
 import '../../chords/chords_page.dart';
 import '../../scales/scales_page.dart';
@@ -99,15 +98,9 @@ class ToolsPage extends StatelessWidget {
                     description: '让节奏陪你，把灵感叠成音乐',
                     tools: [
                       _Tool(
-                        '实时效果器',
-                        '手机内置单块与箱头 · 桌面另支持 VST3',
-                        Icons.graphic_eq,
-                        EffectsPage(),
-                      ),
-                      _Tool(
-                        '鼓机',
-                        '即兴伴奏 · 鼓机与 Looper 叠录',
-                        Icons.album_outlined,
+                        '即兴工作台',
+                        '鼓机伴奏 · Looper 叠录与实时效果器',
+                        Icons.queue_music,
                         DrumsPage(),
                       ),
                     ],
@@ -167,15 +160,17 @@ class _ToolGroup extends StatelessWidget {
               final twoColumns =
                   constraints.maxWidth >= 700 &&
                   MediaQuery.textScalerOf(context).scale(16) <= 24;
+              // 只有一张卡片时铺满整行，避免宽屏出现半宽的孤卡。
+              final columns = twoColumns && tools.length > 1 ? 2 : 1;
+              final cardWidth =
+                  (constraints.maxWidth - 16 * (columns - 1)) / columns;
               return Wrap(
                 spacing: 16,
                 runSpacing: 4,
                 children: tools
                     .map(
                       (tool) => SizedBox(
-                        width: twoColumns
-                            ? (constraints.maxWidth - 16) / 2
-                            : constraints.maxWidth,
+                        width: cardWidth,
                         child: Card.filled(
                           clipBehavior: Clip.antiAlias,
                           child: InkWell(

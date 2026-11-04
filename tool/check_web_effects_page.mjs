@@ -1,10 +1,10 @@
 // 端到端验证：真实 Flutter Web 产物 + 真实 Chrome + 假麦克风设备。
 // 用法：node tool/check_web_effects_page.mjs（需先执行 flutter build web --release）
 //
-// 阶段 A（用户从首页点进效果器页，页面已有粘性用户激活）：
-//   自动开始监听 → AudioContext running → getUserMedia 约束 → AudioWorkletNode → 电平回报 → 添加内置单块。
-// 阶段 B（刷新页面后用 DOM click 进入效果器页，刻意不产生用户激活）：
-//   页面应提示「需要用户手势」；随后真实点击「开始监听」按钮 → 音频链路跑通。
+// 阶段 A（用户从首页点进「即兴工作台」，滚到页面下方的效果器区再点「开始监听」）：
+//   AudioContext running → getUserMedia 约束 → AudioWorkletNode → 电平回报 → 添加内置单块。
+// 阶段 B（刷新页面后用 DOM click 进入即兴工作台，刻意不产生用户激活）：
+//   进入工作台只做设备检测，不开麦；随后真实点击「开始监听」按钮 → 音频链路跑通。
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -119,6 +119,19 @@ try {
     return out.result && out.result.result ? out.result.result.value : undefined;
   };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // 截图存档（用于人工核对画布上的真实渲染，语义树不暴露的文本也能看到）。
+  const capture = async (file) => {
+    const out = await send('Page.captureScreenshot', { format: 'png' });
+    if (!out || !out.result || !out.result.data) {
+      console.log('截图失败：' + file);
+      return false;
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, Buffer.from(out.result.data, 'base64'));
+    console.log('截图已保存：' + file);
+    return true;
+  };
 
   await send('Page.enable');
   await send('Runtime.enable');
@@ -239,26 +252,80 @@ try {
     return cands;
   })()`);
 
+  // 诊断：抓语义树里匹配正则的节点（含 aria-label、文本内容与尺寸）。
+  const dumpSemantics = async (pattern) => {
+    const out = await evaluate(`(() => {
+      const host = document.querySelector('flt-semantics-host') || document.body;
+      const re = new RegExp(${JSON.stringify(pattern)});
+      const out = [];
+      for (const n of host.querySelectorAll('*')) {
+        const al = (n.getAttribute && n.getAttribute('aria-label')) || '';
+        const txt = (n.textContent || '').trim();
+        if (!re.test(al) && !re.test(txt)) continue;
+        const r = n.getBoundingClientRect();
+        out.push({
+          tag: n.tagName.toLowerCase(), role: n.getAttribute('role') || '',
+          al: al.slice(0, 90), txt: txt.slice(0, 90),
+          w: Math.round(r.width), h: Math.round(r.height), y: Math.round(r.y)
+        });
+      }
+      return out.slice(0, 40);
+    })()`);
+    console.log('语义诊断[' + pattern + ']：' + JSON.stringify(out));
+    return out;
+  };
+
+  // 诊断：直接看语义 DOM 里「效果链」计数字段的原文（区分渲染缺失与文案变化）。
+  const chainHtml = async () => {
+    const out = await evaluate(`(() => {
+      const host = document.querySelector('flt-semantics-host') || document.body;
+      const html = host.innerHTML || '';
+      const i = html.indexOf('效果链');
+      const txt = host.textContent || '';
+      const j = txt.indexOf('效果链');
+      return {
+        inHtml: i >= 0,
+        htmlSnippet: i >= 0 ? html.slice(Math.max(0, i - 60), i + 120) : null,
+        textSnippet: j >= 0 ? txt.slice(Math.max(0, j - 20), j + 40) : null
+      };
+    })()`);
+    console.log('效果链字段诊断：' + JSON.stringify(out));
+    return out;
+  };
+
+  // 滚动 Flutter 画布：效果器在即兴工作台页面底部，需要先把区域滚进视口。
+  // 注意：语义节点上的 scrollIntoView 对 Flutter 画布无效，只能走输入事件。
+  const scrollBy = async (deltaY) => {
+    await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 700, y: 1200, deltaX: 0, deltaY });
+    await sleep(220);
+  };
+
+  // 把目标文案的语义节点滚进视口：目标可能在下方（工作台底部），也可能在上方（回滚后）。
+  const scrollToLabel = async (label, maxSteps = 40) => {
+    for (let i = 0; i <= maxSteps; i++) {
+      const cands = await findCandidates(label);
+      const vh = (await evaluate('window.innerHeight')) || 2200;
+      if (cands && cands.length) {
+        const t = cands[0];
+        if (t.y > 0 && t.y < vh - 20) return true;
+        await scrollBy(t.y >= vh - 20 ? 600 : -600);
+      } else {
+        await scrollBy(600);
+      }
+    }
+    const cands = await findCandidates(label);
+    return !!(cands && cands.length && cands[0].inView);
+  };
+
   // 真实鼠标点击（会产生用户激活）
   const realClick = async (label) => {
     let cands = await findCandidates(label);
     console.log('--- 候选「' + label + '」--- ' + JSON.stringify(cands.slice(0, 3)));
     if (!cands || !cands.length) return false;
     if (!cands[0].inView) {
-      await evaluate(`(() => {
-        const host = document.querySelector('flt-semantics-host') || document.body;
-        for (const n of host.querySelectorAll('flt-semantics, [role], [aria-label]')) {
-          const al = (n.getAttribute('aria-label') || '');
-          const txt = (n.textContent || '').trim();
-          if (al.includes(${JSON.stringify(label)}) || txt.includes(${JSON.stringify(label)})) {
-            n.scrollIntoView({ block: 'center' });
-            return true;
-          }
-        }
-        return false;
-      })()`);
-      await sleep(800);
+      await scrollToLabel(label);
       cands = await findCandidates(label);
+      if (!cands || !cands.length) return false;
     }
     const t = cands[0];
     await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: t.x, y: t.y, button: 'none', clickCount: 0 });
@@ -267,6 +334,17 @@ try {
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: t.x, y: t.y, button: 'left', clickCount: 1 });
     await sleep(1200);
     return true;
+  };
+
+  // 反复下滚，直到目标文案的语义节点完全进入视口（仅向下）。
+  const scrollUntilVisible = async (label, maxSteps = 40) => {
+    for (let i = 0; i <= maxSteps; i++) {
+      const cands = await findCandidates(label);
+      if (cands && cands.length && cands[0].inView) return true;
+      await scrollBy(600);
+    }
+    const cands = await findCandidates(label);
+    return !!(cands && cands.length && cands[0].inView);
   };
 
   // DOM click（不产生用户激活）
@@ -385,12 +463,16 @@ try {
     catch (err) { load.catch(() => {}); throw err; }
   };
 
-  // ---------- 阶段 A：从首页真实点击进入效果器页 ----------
-  console.log('\n===== 阶段 A：首页点击进入 → 自动开始监听 =====');
+  // ---------- 阶段 A：从首页进入即兴工作台 → 滚到效果器区 → 真实点击「开始监听」 ----------
+  console.log('\n===== 阶段 A：首页进入即兴工作台 → 点击「开始监听」 =====');
   await navigate(`http://127.0.0.1:${PORT}/index.html`);
   await waitFlutter();
-  await realClick('实时效果器');
-  check('A：进入「实时效果器」页', await pageHas('效果链 · 0/8')(), '');
+  await realClick('即兴工作台');
+  check('A：进入「即兴工作台」页', await pageHas('鼓机音量')(), '');
+  const effectsInView = await scrollUntilVisible('效果链 · 0/8');
+  check('A：滚到工作台下方的效果器区', effectsInView && await pageHas('效果链 · 0/8')(), '');
+  await chainHtml();
+  await realClick('开始监听');
   await sleep(4000);
   let probeA = await readProbe();
   console.log('探针 A：' + JSON.stringify(probeA));
@@ -398,8 +480,16 @@ try {
   check('A：页面显示「正在监听」', await pageHas('正在监听')(), '');
 
   // 添加一块过载，验证 Dart → worklet → status → UI 的往返
+  await scrollToLabel('过载');
   await realClick('过载');
-  check('A：从效果库添加「过载」并写入效果链', await pageHas('效果链 · 1/8')(), '');
+  await sleep(800);
+  await chainHtml();
+  const chainLabels = await dumpSemantics('效果链|过载|驱动|音色|信号链');
+  // 效果板的无障碍标签会写出当前串联顺序，计数文案也可能被合并进父节点。
+  const chainAdded = chainLabels.some(t => /信号链：吉他输入 → 过载 Overdrive/.test(t.al || '')) ||
+    chainLabels.some(t => /效果链 · 1\/8/.test((t.al || '') + ' ' + (t.txt || '')));
+  check('A：从效果库添加「过载」并写入效果链', chainAdded,
+    JSON.stringify(chainLabels.slice(0, 3)));
   const knobLabels = await evaluate(`(() => {
     const host = document.querySelector('flt-semantics-host') || document.body;
     const out = new Set();
@@ -411,7 +501,11 @@ try {
   })()`);
   check('A：过载旋钮参数已渲染', (knobLabels || []).length >= 2, JSON.stringify(knobLabels));
 
+  // 截图存档：确认「效果链 · N/8」计数在画布上真实可见（语义树可能不暴露该文本）。
+  await capture(path.join(root, '.tmp', 'effects_after_overdrive.png'));
+
   // 诊断面板：确认页面写出了当前采集链路（低延迟插入式流或兼容路径）。
+  await scrollToLabel('声卡设置与延迟诊断');
   await realClick('声卡设置与延迟诊断');
   await sleep(1500);
   const hasMstpText = await pageHas('采集链路：低延迟插入式流')();
@@ -419,29 +513,23 @@ try {
   check('A：诊断面板显示采集链路', hasMstpText || hasFallbackText,
     'mstp=' + hasMstpText + ' fallback=' + hasFallbackText);
 
-  // ---------- 阶段 B：无用户激活进入 → 手势提示 → 真实点击「开始监听」 ----------
-  console.log('\n===== 阶段 B：无用户激活进入 → 手势提示 → 点击「开始监听」 =====');
+  // ---------- 阶段 B：无用户激活进入工作台 → 只做设备检测 → 真实点击「开始监听」 ----------
+  console.log('\n===== 阶段 B：无用户激活进入即兴工作台 → 点击「开始监听」 =====');
   await send('Page.reload');
   await waitFlutter();
-  const domClicked = await domClick('实时效果器');
-  check('B：用 DOM click 进入效果器页（不产生用户激活）', domClicked, '');
+  const domClicked = await domClick('即兴工作台');
+  check('B：用 DOM click 进入即兴工作台（不产生用户激活）', domClicked, '');
   await sleep(4000);
-  const textsB = await pageText();
-  const hintB = await evaluate(`(() => {
-    const host = document.querySelector('flt-semantics-host') || document.body;
-    for (const n of host.querySelectorAll('*')) {
-      const al = n.getAttribute && n.getAttribute('aria-label');
-      if (al && al.includes('用户手势')) return al;
-      const txt = (n.textContent || '').trim();
-      if (txt && txt.includes('用户手势')) return txt.slice(0, 160);
-    }
-    return '';
-  })()`);
-  console.log('B 页面文本：' + textsB.slice(0, 8).join(' | '));
-  check('B：无用户激活时给出中文手势提示', String(hintB).includes('用户手势'), String(hintB).slice(0, 110));
   const probeB0 = await readProbe();
-  check('B：提示阶段未打开麦克风、未开始处理', probeB0.gum.length === 0 && probeB0.meterCount === 0,
+  check('B：检测阶段未打开麦克风、未开始处理',
+    probeB0.gum.length === 0 && probeB0.meterCount === 0 && probeB0.contexts === 0,
     'gum=' + probeB0.gum.length + ' meters=' + probeB0.meterCount + ' contexts=' + probeB0.contexts);
+  // 效果器面板在工作台底部：先滚进视口，再断言面板文案确实提示「尚未开始监听」。
+  await scrollToLabel('开始监听');
+  const statusNodes = await dumpSemantics('尚未开始监听|可用性以设备实际打开结果为准|正在检查效果器|检测通过');
+  check('B：进入工作台只做设备检测，提示尚未开始监听',
+    statusNodes.some(t => /尚未开始监听/.test((t.al || '') + ' ' + (t.txt || ''))),
+    JSON.stringify(statusNodes.slice(0, 3)));
 
   await realClick('开始监听');
   await sleep(5000);

@@ -30,12 +30,15 @@ void main() {
         tester.platformDispatcher.textScaleFactorTestValue = 2;
         await tester.pumpWidget(const GuitarbookApp());
         await tester.pumpAndSettle();
-        for (final title in ['吉他调音器', '节拍器', '和弦练习', '音阶指板', '实时效果器', '鼓机']) {
+        for (final title in ['吉他调音器', '节拍器', '和弦练习', '音阶指板', '即兴工作台']) {
           await tester.ensureVisible(find.text(title));
           await tester.pumpAndSettle();
           expect(find.text(title).hitTestable(), findsOneWidget);
           expect(tester.takeException(), isNull);
         }
+        // 效果器只在即兴工作台内提供，首页不再保留独立入口。
+        expect(find.text('实时效果器'), findsNothing);
+        expect(find.text('鼓机'), findsNothing);
         await tester.pumpWidget(const SizedBox.shrink());
       }
     }
