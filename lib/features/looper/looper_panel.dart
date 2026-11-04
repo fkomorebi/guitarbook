@@ -266,30 +266,21 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
         ),
       ],
     );
-    final layers = Row(
+    final layers = Column(
       children: [
-        for (var layer = 0; layer < 6; layer++)
-          Expanded(
-            child: Semantics(
-              label: '第 ${layer + 1} 层${layer < _c.layers ? '已录制' : '空'}',
-              child: Container(
-                height: 26,
-                alignment: Alignment.center,
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(6),
-                  color: layer < _c.layers
-                      ? colors.primaryContainer
-                      : colors.surfaceContainerLow,
-                ),
-                child: Text(
-                  '${layer + 1}',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: layer < _c.layers
-                        ? colors.onPrimaryContainer
-                        : colors.outline,
-                  ),
-                ),
+        Row(
+          children: [
+            for (var layer = 0; layer < 6; layer++) _layerTile(context, layer),
+          ],
+        ),
+        if (_c.layers > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '点层级方块右上角 × 可删除单层',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: colors.onSurfaceVariant,
               ),
             ),
           ),
@@ -540,7 +531,7 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
           if (!compact) ...[
             const SizedBox(height: 8),
             Text(
-              '戴上耳机 · 首层最长 30 秒 · 离开页面清空',
+              '戴上耳机 · 首层最长 30 秒 · 点 × 删除单层 · 离开页面清空',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colors.onSurfaceVariant,
@@ -548,6 +539,103 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  /// One slot of the layer strip. Recorded layers carry a small delete button
+  /// so any layer can be dropped, not only the newest one.
+  Widget _layerTile(BuildContext context, int layer) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final recorded = layer < _c.layers;
+    final tile = Container(
+      height: 26,
+      alignment: Alignment.center,
+      margin: const EdgeInsets.symmetric(horizontal: 3),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        color: recorded ? colors.primaryContainer : colors.surfaceContainerLow,
+      ),
+      child: Text(
+        '${layer + 1}',
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: recorded ? colors.onPrimaryContainer : colors.outline,
+        ),
+      ),
+    );
+    if (!recorded) {
+      return Expanded(
+        child: Semantics(label: '第 ${layer + 1} 层空', child: tile),
+      );
+    }
+    // 录音或处理音频期间不允许删除，避免与写层同时改动音源。循环播放时输入
+    // 一直是打开的，所以只检查忙碌与录音状态。
+    final enabled = !_c.busy && !_c.recording;
+    final label = '删除第 ${layer + 1} 层';
+    return Expanded(
+      child: Semantics(
+        label: '第 ${layer + 1} 层已录制',
+        child: SizedBox(
+          height: 26,
+          child: Stack(
+            children: [
+              Positioned.fill(child: tile),
+              Positioned(
+                top: 0,
+                right: 0,
+                child: Semantics(
+                  button: true,
+                  enabled: enabled,
+                  label: label,
+                  onTap: enabled ? () => _deleteLayer(layer) : null,
+                  excludeSemantics: true,
+                  child: Tooltip(
+                    message: label,
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: InkWell(
+                        onTap: enabled ? () => _deleteLayer(layer) : null,
+                        borderRadius: BorderRadius.circular(11),
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: Icon(
+                            Icons.close_rounded,
+                            size: 13,
+                            color: colors.onPrimaryContainer,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Deletes one layer and offers a single undo from the snack bar.
+  void _deleteLayer(int layer) {
+    final number = layer + 1;
+    if (!_c.removeLayer(layer)) {
+      _refresh();
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.clearSnackBars();
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text('已删除第 $number 层'),
+        action: SnackBarAction(
+          label: '撤销',
+          onPressed: () {
+            _c.restoreRemovedLayer();
+          },
+        ),
       ),
     );
   }
@@ -669,7 +757,7 @@ class _LooperPanelState extends State<LooperPanel> with WidgetsBindingObserver {
     const Text('回放音量 0–400%，100% 为原回放电平。调高会同时放大底噪，多层叠加失真时请调低；不改变录音输入或鼓机音量。'),
     const SizedBox(height: 8),
     const Text(
-      '首层：踩一次录音，再踩一次循环。播放中踩一次叠录，再踩一次结束，或满一圈自动结束；最多 6 层。停止丢弃未完成录音，保留已完成层。',
+      '首层：踩一次录音，再踩一次循环。播放中踩一次叠录，再踩一次结束，或满一圈自动结束；最多 6 层。停止丢弃未完成录音，保留已完成层。点层级方块右上角的 × 可删除任意一层，删除后可在提示条中撤销一次。',
     ),
     const SizedBox(height: 8),
     Text(

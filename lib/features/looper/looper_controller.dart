@@ -15,11 +15,32 @@ class _Layer {
   final PositionedLoopAudio audio;
 }
 
+/// A layer the user deleted, kept so the deletion can be undone once.
+class _RemovedLayer {
+  _RemovedLayer({
+    required this.index,
+    required this.samples,
+    required this.loopFrames,
+    required this.wasPlaying,
+  });
+  final int index;
+  final Float32List samples;
+  final int loopFrames;
+  /// Whether the loop was running when the layer was deleted. Deleting the
+  /// last layer stops the loop, so undo has to restart it.
+  final bool wasPlaying;
+}
+
 class LooperController extends ChangeNotifier {
   LooperController(this.input, this.outputFactory);
   final LoopInput input;
   final PositionedLoopAudio Function() outputFactory;
   final List<_Layer> _layers = [];
+  /// Loop length in frames. It belongs to the loop instead of the first layer,
+  /// so deleting the base layer keeps the remaining layers aligned.
+  int _loopFrames = 0;
+  /// The layer deleted last, kept for a single undo.
+  _RemovedLayer? _removed;
   StreamSubscription<Uint8List>? _subscription;
   Timer? _watchdog;
   final Stopwatch _lastInput = Stopwatch();
@@ -75,13 +96,29 @@ class LooperController extends ChangeNotifier {
 
   bool get recording => _take != null || _smartTake != null;
   int get layers => _layers.length;
-  int get frames => _layers.isEmpty ? 0 : _layers.first.samples.length;
+
+  /// Loop length in frames. It stays stable while layers are added or removed.
+  int get frames => _loopFrames;
   double get seconds => frames / loopSampleRate;
   double get recordedSeconds =>
       _smartTake?.seconds ?? (_take?.count ?? 0) / loopSampleRate;
   Duration get position => _layers.isEmpty || !playing
       ? Duration.zero
       : _layers.first.audio.position;
+
+  /// Phase inside the running loop. Every layer shares the same phase because
+  /// each one joins with the offset of the loop, so any layer can report it.
+  Duration _loopOffset(int length) {
+    if (length <= 0) return Duration.zero;
+    final loopMicros = length * 1000000 ~/ loopSampleRate;
+    if (loopMicros <= 0) return Duration.zero;
+    try {
+      return Duration(microseconds: position.inMicroseconds % loopMicros);
+    } catch (_) {
+      return Duration.zero;
+    }
+  }
+
   Future<void> get settled => _queue;
   bool _current(int generation) => !_disposed && generation == _generation;
   void _notify() {
@@ -252,16 +289,12 @@ class LooperController extends ChangeNotifier {
             ),
           );
           if (!_current(generation)) return;
-          final offset = frames == 0
-              ? Duration.zero
-              : Duration(
-                  microseconds:
-                      position.inMicroseconds %
-                      (length * 1000000 ~/ loopSampleRate),
-                );
+          final offset = frames == 0 ? Duration.zero : _loopOffset(length);
           audio.setGain(_playbackGain);
           audio.playAt(offset);
           _layers.add(_Layer(samples, audio));
+          // The first take defines the loop length, later takes follow it.
+          _loopFrames = length;
           accepted = true;
           playing = true;
         } finally {
@@ -300,13 +333,18 @@ class LooperController extends ChangeNotifier {
       final failure = await unlocked;
       if (failure != null) throw failure;
       if (!_current(generation)) return;
-      await _capture(generation);
-      if (!_current(generation) || !capturing) return;
-      for (final layer in _layers) {
-        layer.audio.playAt(Duration.zero);
-      }
-      playing = true;
+      await _restartLoop(generation);
     });
+  }
+
+  /// Re-arms the input and plays every layer from the start of the loop.
+  Future<void> _restartLoop(int generation) async {
+    await _capture(generation);
+    if (!_current(generation) || !capturing) return;
+    for (final layer in _layers) {
+      layer.audio.playAt(Duration.zero);
+    }
+    playing = true;
   }
 
   void togglePlayback() {
@@ -336,9 +374,13 @@ class LooperController extends ChangeNotifier {
     _armedAudio = null;
     final subscription = _subscription;
     _subscription = null;
+    // Releasing the listener must not block the action queue: a pending
+    // cancel would freeze every later pedal action.
+    unawaited(
+      subscription?.cancel().catchError((Object _) {}) ?? Future<void>.value(),
+    );
     _queue = _queue
         .then((_) async {
-          await subscription?.cancel();
           await input.stop();
           await armed?.dispose();
         })
@@ -363,11 +405,106 @@ class LooperController extends ChangeNotifier {
     _notify();
   }
 
+  /// Removes one recorded layer by index. The loop length and the phase of the
+  /// remaining layers stay untouched, so deleting the base layer does not
+  /// shorten the loop. Returns false when the request is not allowed.
+  bool removeLayer(int index) {
+    if (_disposed || busy || recording) return false;
+    if (index < 0 || index >= _layers.length) return false;
+    final layer = _layers.removeAt(index);
+    try {
+      layer.audio.silence();
+    } catch (_) {}
+    _queue = _queue
+        .then((_) {
+          return layer.audio.dispose();
+        })
+        .catchError((Object _) {});
+    _removed = _RemovedLayer(
+      index: index,
+      samples: layer.samples,
+      loopFrames: _loopFrames,
+      wasPlaying: playing,
+    );
+    if (_layers.isEmpty) {
+      // Nothing is left to play, so the loop length resets with the last layer.
+      _loopFrames = 0;
+      stop();
+    }
+    _notify();
+    return true;
+  }
+
+  /// Restores the layer deleted last at its original position. The audio is
+  /// rebuilt from the stored samples and joins the loop at the current phase.
+  bool restoreRemovedLayer() {
+    if (_disposed) return false;
+    if (busy || recording) {
+      error = '当前正在录音或处理音频，请稍后再恢复该层。';
+      _notify();
+      return false;
+    }
+    final removed = _removed;
+    if (removed == null) {
+      error = '没有可恢复的层。';
+      _notify();
+      return false;
+    }
+    if (_loopFrames != 0 && _loopFrames != removed.loopFrames) {
+      error = '循环长度已改变，无法恢复该层。';
+      _notify();
+      return false;
+    }
+    final audio = outputFactory();
+    final unlocked = _unlock([audio, for (final layer in _layers) layer.audio]);
+    _enqueue((generation) async {
+      var accepted = false;
+      try {
+        final failure = await unlocked;
+        if (failure != null) throw failure;
+        if (!_current(generation)) return;
+        await audio.prepare(
+          MetronomePattern.rendered(
+            bpm: 100,
+            beats: 4,
+            sampleRate: loopSampleRate,
+            framesPerBeat: removed.loopFrames ~/ 4,
+            samples: removed.samples,
+          ),
+        );
+        if (!_current(generation)) return;
+        audio.setGain(_playbackGain);
+        if (playing) {
+          // The loop is still running, so the layer joins at the current phase.
+          audio.playAt(_loopOffset(removed.loopFrames));
+        }
+        final index = removed.index > _layers.length
+            ? _layers.length
+            : removed.index;
+        _layers.insert(index, _Layer(removed.samples, audio));
+        // The layer carries the loop length, so restore it with the layer.
+        _loopFrames = removed.loopFrames;
+        accepted = true;
+        // Only clear the slot when no newer deletion replaced it meanwhile.
+        if (identical(_removed, removed)) _removed = null;
+        if (!playing && removed.wasPlaying) {
+          // Deleting the last layer stopped the loop, so undo restarts it.
+          await _restartLoop(generation);
+        }
+      } finally {
+        if (!accepted) await audio.dispose();
+      }
+    });
+    return true;
+  }
+
   void clear() {
     if (_disposed) return;
     stop();
     final old = List<_Layer>.of(_layers);
     _layers.clear();
+    _loopFrames = 0;
+    _removed = null;
     error = null;
     _queue = _queue
         .then((_) async {
