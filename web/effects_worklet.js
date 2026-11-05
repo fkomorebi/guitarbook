@@ -2,8 +2,11 @@
  * guitarbook · 电脑端浏览器版效果器 DSP 内核（AudioWorklet）
  *
  * 1:1 移植自 native/effects_host/builtin_effect.h（JUCE C++ 内置效果器）：
- *   fuzz / overdrive / wah / compressor / reverb / delay /
+ *   fuzz / overdrive / wah / compressor / reverb / delay / pitch /
  *   amp_clean / amp_chime / amp_crunch / amp_modern
+ *
+ * 移调（pitch）另有一份两端共用的权威规格：docs/pitch_shifter_spec.md，
+ * C++ 与 JS 必须按同一份规格实现（同一输入 → 浮点误差 ≤ 1e-4）。
  *
  * 约束：
  *   - 单文件、自包含：无 import / 无 fetch / 无 DOM 依赖（AudioWorkletGlobalScope 里没有 DOM）。
@@ -339,7 +342,79 @@
     }
 
     // ---------------------------------------------------------------------------
-    // 4. 效果器参数表（顺序 = describeParameters() 顺序）
+    // 4. 移调：双读头环形缓冲 + 交叉淡化（等价 C++ 端的 pitch 分支）
+    //    权威规格：docs/pitch_shifter_spec.md（C++ / JS 两端共用，逐条照抄，不做改写）
+    // ---------------------------------------------------------------------------
+
+    /** 交叉淡化长度（采样），规格 §3 的 F。 */
+    const PITCH_FADE_LENGTH = 256;
+
+    /**
+     * 移调状态机：两个读头在环形缓冲上以 ratio 速度推进，读头落后量越界时切换读头，
+     * 并用 256 采样的线性交叉淡化避免爆音（规格 §2 / §4）。
+     */
+    class PitchShifter {
+        /**
+         * @param {number} rate 采样率
+         */
+        constructor (rate) {
+            this.reset(rate);
+        }
+
+        /** 复位全部状态（规格 §2）：缓冲区清零、读头归零、blend = 1（0 半音直通）。 */
+        reset (rate) {
+            this.rate = rate;
+            // D = ceil(rate * 0.03)，M = 2 * D（环形缓冲长度，两声道各一份）。
+            this.delay = Math.ceil(rate * 0.03);
+            this.length = this.delay * 2;
+            // 触发读头切换的上下限。
+            this.minDelay = this.delay / 2.0;
+            this.maxDelay = this.delay * 1.5;
+            this.buffer = [new Float32Array(this.length), new Float32Array(this.length)];
+            this.time = 0;
+            this.head = [0, 0];
+            this.active = 0;
+            this.fade = -1;
+            // blend = 1 表示全干直通，0 表示全湿移调声。
+            this.blend = 1.0;
+            // 每声道二阶（一阶级联）低通状态。
+            this.filter = [new Float64Array(2), new Float64Array(2)];
+            // 直通融合系数的一阶平滑步长（15 ms 时间常数）。
+            this.blendStep = 1 - Math.exp(-1 / (rate * 0.015));
+            // 湿声柔化低通：cutoff = 0.4 * rate ⇒ 系数与采样率无关。
+            this.filterAlpha = 1 - Math.exp(-TWO_PI * 0.4);
+        }
+
+        /** 规格 §4 的 mod(x, M) = x - floor(x / M) * M，结果落在 [0, M)。 */
+        mod (value, modulus) {
+            // 与 C++ 端 pitchMod 逐行一致：先取模，再做两道越界防御
+            //（极端浮点舍入可能把结果推出 [0, M)，两端必须同样修正）。
+            let result = value - Math.floor(value / modulus) * modulus;
+            if (result < 0)
+                result += modulus;
+            if (result >= modulus)
+                result -= modulus;
+            return result;
+        }
+
+        /** 读取环形缓冲的一个位置：相邻两点线性插值（规格 §4「读取函数」）。 */
+        read (channel, position) {
+            const base = Math.floor(position);
+            // 与 C++ 端 readPitch 逐行一致：索引越界时做同样的修正。
+            let first = base;
+            if (first < 0)
+                first += this.length;
+            if (first >= this.length)
+                first -= this.length;
+            const fraction = position - base;
+            const second = (first + 1) % this.length;
+            const buffer = this.buffer[channel];
+            return buffer[first] * (1 - fraction) + buffer[second] * fraction;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // 5. 效果器参数表（顺序 = describeParameters() 顺序）
     // ---------------------------------------------------------------------------
 
     function createEffectDefinition (kind) {
@@ -437,6 +512,18 @@
                         { id: 'mix', name: '干湿比', min: 0, max: 1, initial: 0.25, unit: '' }
                     ]
                 };
+            case 'pitch':
+                // 参数顺序 = 参数下标，两端（C++ / JS）必须一致（规格 §1）。
+                return {
+                    kind,
+                    title: '移调 Pitch',
+                    model: -1,
+                    parameters: [
+                        { id: 'semitone', name: '移调', min: -12, max: 12, initial: 0, unit: '半音' },
+                        { id: 'mix', name: '干湿比', min: 0, max: 1, initial: 1, unit: '' },
+                        { id: 'level', name: '输出', min: 0, max: 1, initial: 1, unit: '' }
+                    ]
+                };
             default:
                 return null;
         }
@@ -445,11 +532,12 @@
     /** 所有内置效果器类型。 */
     const BUILTIN_KINDS = [
         'fuzz', 'overdrive', 'wah', 'compressor', 'reverb', 'delay',
-        'amp_clean', 'amp_chime', 'amp_crunch', 'amp_modern'
+        'amp_clean', 'amp_chime', 'amp_crunch', 'amp_modern',
+        'pitch'
     ];
 
     // ---------------------------------------------------------------------------
-    // 5. BuiltinEffect：1:1 移植 JUCE 内置效果器
+    // 6. BuiltinEffect：1:1 移植 JUCE 内置效果器
     // ---------------------------------------------------------------------------
 
     class BuiltinEffect {
@@ -486,6 +574,7 @@
             this.delayLength = 0;
             this.delayBuffer = [new Float32Array(0), new Float32Array(0)];
             this.reverb = null;
+            this.pitch = null;
 
             this.prepareToPlay(rate || 48000, 512);
         }
@@ -535,6 +624,10 @@
             if (this.kind === 'reverb') {
                 this.reverb = new FreeverbReverb(rate);
                 this.updateReverb(this.parameters[0].value, this.parameters[1].value, this.parameters[2].value);
+            }
+            if (this.kind === 'pitch') {
+                // 移调状态（环形缓冲 / 读头 / 淡变 / 低通）按规格 §2 全部复位。
+                this.pitch = new PitchShifter(rate);
             }
         }
 
@@ -686,6 +779,77 @@
                 return;
             }
 
+            if (this.kind === 'pitch') {
+                // ---- 移调（双读头环形缓冲 + 交叉淡化，规格 §4）----
+                const pitch = this.pitch;
+                const length = pitch.length;
+                for (let sample = 0; sample < samples; ++sample) {
+                    this.fillValues(values);
+                    // 步骤 A：参数换算。
+                    const semitone = values[0];
+                    const mix = values[1];
+                    const level = values[2];
+                    const ratio = Math.pow(2.0, semitone / 12.0);
+                    // 0 半音 → 直通；非 0 半音 → 湿声。
+                    const target = Math.abs(semitone) < 0.01 ? 1.0 : 0.0;
+                    pitch.blend += (target - pitch.blend) * pitch.blendStep;
+                    const wetGain = mix * (1.0 - pitch.blend);
+
+                    // 步骤 B：写入与切换（共享状态每采样只更新一次，两声道共用）。
+                    for (let channel = 0; channel < 2; ++channel) {
+                        pitch.buffer[channel][Math.trunc(pitch.time)] =
+                            channel === 0 ? left[sample] : right[sample];
+                    }
+                    pitch.time = pitch.mod(pitch.time + 1.0, length);
+                    const now = pitch.mod(pitch.time - 1.0, length);
+                    // 读头落后量（规格里的 delay）：取值范围 (0, M)。
+                    const lag = pitch.mod(now - pitch.head[pitch.active], length);
+                    if (lag < pitch.minDelay) {
+                        // 读头追得太近：换到落后 D 个采样的新读头。
+                        const next = 1 - pitch.active;
+                        pitch.head[next] = pitch.mod(now - (lag + pitch.delay), length);
+                        pitch.fade = 0;
+                        pitch.active = next;
+                    } else if (lag > pitch.maxDelay) {
+                        // 读头落得太远：换到靠近 D 个采样的新读头。
+                        const next = 1 - pitch.active;
+                        pitch.head[next] = pitch.mod(now - (lag - pitch.delay), length);
+                        pitch.fade = 0;
+                        pitch.active = next;
+                    }
+
+                    // 步骤 C：读取与混合（每声道独立低通状态）。
+                    for (let channel = 0; channel < 2; ++channel) {
+                        const input = channel === 0 ? left[sample] : right[sample];
+                        let wet = pitch.read(channel, pitch.head[pitch.active]);
+                        if (pitch.fade >= 0) {
+                            const old = pitch.read(channel, pitch.head[1 - pitch.active]);
+                            const t = pitch.fade / (PITCH_FADE_LENGTH - 1);
+                            wet = old * (1.0 - t) + wet * t;
+                        }
+                        const filterState = pitch.filter[channel];
+                        filterState[0] += pitch.filterAlpha * (wet - filterState[0]);
+                        filterState[1] += pitch.filterAlpha * (filterState[0] - filterState[1]);
+                        wet = filterState[1];
+                        const output = (input * (1.0 - wetGain) + wet * wetGain) * level;
+                        if (channel === 0)
+                            left[sample] = output;
+                        else
+                            right[sample] = output;
+                    }
+
+                    // 步骤 D：推进（淡变计数 + 两个读头同步前进）。
+                    if (pitch.fade >= 0) {
+                        pitch.fade += 1;
+                        if (pitch.fade >= PITCH_FADE_LENGTH)
+                            pitch.fade = -1;
+                    }
+                    pitch.head[0] = pitch.mod(pitch.head[0] + ratio, length);
+                    pitch.head[1] = pitch.mod(pitch.head[1] + ratio, length);
+                }
+                return;
+            }
+
             // ---- fuzz / overdrive ----
             for (let sample = 0; sample < samples; ++sample) {
                 this.fillValues(values);
@@ -715,7 +879,7 @@
     }
 
     // ---------------------------------------------------------------------------
-    // 6. 效果链（最多 8 块串联，顺序处理，与原生宿主一致）
+    // 7. 效果链（最多 8 块串联，顺序处理，与原生宿主一致）
     // ---------------------------------------------------------------------------
 
     class EffectChain {
@@ -790,7 +954,7 @@
     }
 
     // ---------------------------------------------------------------------------
-    // 7. AudioWorkletProcessor
+    // 8. AudioWorkletProcessor
     // ---------------------------------------------------------------------------
 
     class GuitarbookEffectsProcessor extends BaseProcessor {
@@ -1000,7 +1164,7 @@
     }
 
     // ---------------------------------------------------------------------------
-    // 8. 导出：浏览器注册 processor，Node 暴露模块供离线回归
+    // 9. 导出：浏览器注册 processor，Node 暴露模块供离线回归
     // ---------------------------------------------------------------------------
 
     /**

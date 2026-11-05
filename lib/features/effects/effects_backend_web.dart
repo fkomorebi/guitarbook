@@ -910,7 +910,7 @@ class _EffectSpec {
   final List<_ParameterSpec> parameters;
 }
 
-/// 10 种内置效果器（与 native/effects_host/builtin_effect.h 保持一致）。
+/// 11 种内置效果器（与 native/effects_host/builtin_effect.h 保持一致）。
 const Map<String, _EffectSpec> _effectCatalog = <String, _EffectSpec>{
   'fuzz': _EffectSpec('fuzz', 'Fuzz 法兹', <_ParameterSpec>[
     _ParameterSpec('驱动', 1, 30, 12, ''),
@@ -979,5 +979,10 @@ const Map<String, _EffectSpec> _effectCatalog = <String, _EffectSpec>{
     _ParameterSpec('时间', 20, 1500, 350, 'ms'),
     _ParameterSpec('反馈', 0, 0.9, 0.35, ''),
     _ParameterSpec('干湿比', 0, 1, 0.25, ''),
+  ]),
+  'pitch': _EffectSpec('pitch', '移调 Pitch', <_ParameterSpec>[
+    _ParameterSpec('移调', -12, 12, 0, '半音'),
+    _ParameterSpec('干湿比', 0, 1, 1, ''),
+    _ParameterSpec('输出', 0, 1, 1, ''),
   ]),
 };

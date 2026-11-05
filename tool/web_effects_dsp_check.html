@@ -35,7 +35,7 @@ function runDspAssertions () {
   check('注册名常量', G.PROCESSOR_NAME === 'guitarbook-effects', G.PROCESSOR_NAME);
 
   const kinds = G.BUILTIN_KINDS;
-  check('10 种内置效果器', kinds.length === 10, kinds.join(','));
+  check('11 种内置效果器', kinds.length === 11, kinds.join(','));
 
   // 静音输入 → 静音输出
   {
@@ -47,7 +47,7 @@ function runDspAssertions () {
     check('静音输入 → 静音输出', peak === 0, 'peak=' + peak);
   }
 
-  // 三种采样率 × 10 kind，参数取 0/1，输出必须有限
+  // 三种采样率 × 11 kind，参数取 0/1，输出必须有限
   {
     let bad = '';
     let count = 0;
@@ -68,7 +68,7 @@ function runDspAssertions () {
         }
       }
     }
-    check('3 采样率 × 10 kind 输出有限 (' + count + ' 组)', bad === '', bad);
+    check('3 采样率 × 11 kind 输出有限 (' + count + ' 组)', bad === '', bad);
   }
 
   // amp 参考渲染（对齐原生 renderAmp：输入 0.12*(sin110+sin997+sin6000)）

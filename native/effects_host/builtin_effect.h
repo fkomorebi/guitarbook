@@ -53,6 +53,11 @@ public:
             add("time", "时间", 20, 1500, 350, "ms");
             add("feedback", "反馈", 0, 0.9f, 0.35f, "");
             add("mix", "干湿比", 0, 1, 0.25f, "");
+        } else if (kind == "pitch") {
+            title = juce::String::fromUTF8("移调 Pitch");
+            add("semitone", "移调", -12, 12, 0, "半音");
+            add("mix", "干湿比", 0, 1, 1, "");
+            add("level", "输出", 0, 1, 1, "");
         } else throw juce::String::fromUTF8("未知内置效果器。");
     }
 
@@ -76,6 +81,21 @@ public:
         if (kind == "reverb") updateReverb(parameters[0]->get(), parameters[1]->get(), parameters[2]->get());
         reverb.setSampleRate(rate);
         reverb.reset();
+        if (kind == "pitch") {
+            // 移调状态复位：基准延迟 D = ceil(rate * 0.03)，环形缓冲长度 M = 2 * D。
+            pitchDelay = static_cast<int>(std::ceil(rate * 0.03));
+            pitchLength = pitchDelay * 2;
+            pitchBuffer.setSize(2, pitchLength);
+            pitchBuffer.clear();
+            pitchTime = 0;
+            pitchHead[0] = 0;
+            pitchHead[1] = 0;
+            pitchActive = 0;
+            pitchFade = -1;
+            pitchBlend = 1.0;
+            pitchFilter[0][0] = pitchFilter[0][1] = 0.0;
+            pitchFilter[1][0] = pitchFilter[1][1] = 0.0;
+        }
     }
     void releaseResources() override {}
     bool isBusesLayoutSupported(const BusesLayout& layout) const override {
@@ -89,6 +109,10 @@ public:
         if (kind == "reverb") {
             updateReverb(smooth[0].skip(samples), smooth[1].skip(samples), smooth[2].skip(samples));
             reverb.processStereo(audio.getWritePointer(0), audio.getWritePointer(1), samples);
+            return;
+        }
+        if (kind == "pitch") {
+            processPitch(audio, samples);
             return;
         }
         for (int sample = 0; sample < samples; ++sample) {
@@ -210,7 +234,7 @@ public:
     juce::String kind;
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return kind == "delay" ? 30 : kind == "reverb" ? 10 : 0; }
+    double getTailLengthSeconds() const override { return kind == "delay" ? 30 : kind == "reverb" ? 10 : kind == "pitch" ? 0.1 : 0; }
     juce::AudioProcessorEditor* createEditor() override { return nullptr; }
     bool hasEditor() const override { return false; }
     int getNumPrograms() override { return 1; }
@@ -221,6 +245,80 @@ public:
     void getStateInformation(juce::MemoryBlock&) override {}
     void setStateInformation(const void*, int) override {}
 private:
+    // 移调效果器：环形缓冲 + 双读头交叉淡变，共享状态两声道共用。
+    static constexpr int pitchFadeLength = 256;
+    static double pitchMod(double value, double length) {
+        double result = value - std::floor(value / length) * length;
+        if (result < 0) result += length;
+        if (result >= length) result -= length;
+        return result;
+    }
+    double readPitch(int channel, double position) const {
+        const int length = pitchLength;
+        int first = static_cast<int>(std::floor(position));
+        if (first < 0) first += length;
+        if (first >= length) first -= length;
+        const double fraction = position - std::floor(position);
+        const int second = (first + 1) % length;
+        return static_cast<double>(pitchBuffer.getSample(channel, first)) * (1.0 - fraction)
+            + static_cast<double>(pitchBuffer.getSample(channel, second)) * fraction;
+    }
+    void processPitch(juce::AudioBuffer<float>& audio, int samples) {
+        if (pitchLength <= 0) return;
+        const double blendStep = 1.0 - std::exp(-1.0 / (rate * 0.015));
+        const double filterAlpha = 1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * 0.4);
+        const double minDelay = pitchDelay / 2.0;
+        const double maxDelay = pitchDelay * 1.5;
+        for (int sample = 0; sample < samples; ++sample) {
+            const float semitone = smooth[0].getNextValue();
+            const float mix = smooth[1].getNextValue();
+            const float level = smooth[2].getNextValue();
+            // 步骤 A：参数换算，0 半音保持直通。
+            const double ratio = std::pow(2.0, static_cast<double>(semitone) / 12.0);
+            const double target = std::abs(static_cast<double>(semitone)) < 0.01 ? 1.0 : 0.0;
+            pitchBlend += (target - pitchBlend) * blendStep;
+            const double wetGain = static_cast<double>(mix) * (1.0 - pitchBlend);
+            // 步骤 B：写入环形缓冲并按阈值切换读头。
+            for (int ch = 0; ch < 2; ++ch)
+                pitchBuffer.setSample(ch, static_cast<int>(pitchTime), audio.getSample(ch, sample));
+            pitchTime = pitchMod(pitchTime + 1.0, pitchLength);
+            const double now = pitchMod(pitchTime - 1.0, pitchLength);
+            const double lag = pitchMod(now - pitchHead[pitchActive], pitchLength);
+            if (lag < minDelay) {
+                const int next = 1 - pitchActive;
+                pitchHead[next] = pitchMod(now - (lag + pitchDelay), pitchLength);
+                pitchFade = 0;
+                pitchActive = next;
+            } else if (lag > maxDelay) {
+                const int next = 1 - pitchActive;
+                pitchHead[next] = pitchMod(now - (lag - pitchDelay), pitchLength);
+                pitchFade = 0;
+                pitchActive = next;
+            }
+            // 步骤 C：读取、交叉淡化、湿声低通并与干声混合。
+            for (int ch = 0; ch < 2; ++ch) {
+                double wet = readPitch(ch, pitchHead[pitchActive]);
+                if (pitchFade >= 0) {
+                    const double old = readPitch(ch, pitchHead[1 - pitchActive]);
+                    const double t = static_cast<double>(pitchFade) / (pitchFadeLength - 1);
+                    wet = old * (1.0 - t) + wet * t;
+                }
+                auto& filter = pitchFilter[static_cast<size_t>(ch)];
+                filter[0] += filterAlpha * (wet - filter[0]);
+                filter[1] += filterAlpha * (filter[0] - filter[1]);
+                wet = filter[1];
+                const double input = audio.getSample(ch, sample);
+                audio.setSample(ch, sample, static_cast<float>((input * (1.0 - wetGain) + wet * wetGain) * level));
+            }
+            // 步骤 D：推进淡变计数与两个读头。
+            if (pitchFade >= 0) {
+                pitchFade += 1;
+                if (pitchFade >= pitchFadeLength) pitchFade = -1;
+            }
+            pitchHead[0] = pitchMod(pitchHead[0] + ratio, pitchLength);
+            pitchHead[1] = pitchMod(pitchHead[1] + ratio, pitchLength);
+        }
+    }
     void updateReverb(float room, float damping, float mix) {
         juce::Reverb::Parameters settings;
         settings.roomSize = room;
@@ -235,7 +333,8 @@ private:
     }
     void add(const char* id, const char* name, float low, float high, float initial, const char* unit) {
         auto* parameter = new juce::AudioParameterFloat(juce::ParameterID{id, 1}, juce::String::fromUTF8(name),
-            juce::NormalisableRange<float>(low, high), initial, juce::AudioParameterFloatAttributes().withLabel(unit));
+            juce::NormalisableRange<float>(low, high), initial,
+            juce::AudioParameterFloatAttributes().withLabel(juce::String::fromUTF8(unit)));
         addParameter(parameter);
         parameters.push_back(parameter);
     }
@@ -252,4 +351,14 @@ private:
     int model = -1;
     float envelope = 0;
     int position = 0;
+    // 移调效果器状态
+    juce::AudioBuffer<float> pitchBuffer;
+    int pitchDelay = 0;
+    int pitchLength = 0;
+    double pitchTime = 0;
+    std::array<double, 2> pitchHead{0.0, 0.0};
+    int pitchActive = 0;
+    int pitchFade = -1;
+    double pitchBlend = 1.0;
+    std::array<std::array<double, 2>, 2> pitchFilter{};
 };

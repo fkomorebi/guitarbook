@@ -629,6 +629,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                   ('amp_chime', '英式清脆箱头'),
                   ('amp_crunch', '英式摇滚箱头'),
                   ('amp_modern', '现代高增益箱头'),
+                  ('pitch', '移调'),
                 ])
                   OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(

@@ -6,7 +6,7 @@
  * 断言镜像 native/effects_host/builtin_effect_tests.h（原生 JUCE C++ 回归），
  * 数值与契约一致：
  *   1. 静音输入 → 输出静音
- *   2. 44100/48000/96000 × 10 种 kind，参数在最小/最大值间来回切换 40 块 → 输出必须全部有限
+ *   2. 44100/48000/96000 × 11 种 kind，参数在最小/最大值间来回切换 40 块 → 输出必须全部有限
  *   3. amp 参考渲染：幅度 > 0.01；四款箱头两两 Σ|Δ| > 1；6 个参数各自能改变输出；
  *      master=0 → 静音；两个独立实例输出完全一致（不共享状态）
  *   4. wah：幅度 > 0.001；param0..3 各自改变输出；level=0 → 静音；
@@ -19,8 +19,12 @@
  *   7. reverb：mix=0 → sample0 == 0.5±0.0001（干声 unity）；mix=1 → |sample0| < 0.0001
  *      且 [1000,4096) 有尾巴幅度 > 0.0001
  *   8. 新建的 delay 实例不得继承别的实例尾巴
+ *   9. 移调：0 半音 → 输出与输入逐采样完全一致（直通 / 无额外延迟 / 无梳状失真）
+ *  10. 移调：+12 半音基频升到 440Hz±10%、-12 半音降到 110Hz±10%（零交叉测频）
+ *  11. 移调：参数连续切换 → 无 NaN/Inf、无削波、相邻采样差值受限
+ *  12. 移调：单次 0 → +12 切换无爆音；湿声延迟落在 [D/2, 1.5D]；两个实例互不影响
  *
- * 附加（不计入上面 8 项）：worklet 消息协议的越界保护与电平上报自检。
+ * 附加（不计入上面 12 项）：worklet 消息协议的越界保护与电平上报自检。
  */
 
 'use strict';
@@ -36,9 +40,11 @@ const {
 
 const RENDER_RATE = 48000;
 const RENDER_SAMPLES = 4096;
+const PITCH_RATE = 48000;
+const PITCH_SAMPLES = 48000;
 const ALL_KINDS = [
     'fuzz', 'overdrive', 'wah', 'compressor', 'reverb', 'delay',
-    'amp_clean', 'amp_chime', 'amp_crunch', 'amp_modern'
+    'amp_clean', 'amp_chime', 'amp_crunch', 'amp_modern', 'pitch'
 ];
 
 // ---------------------------------------------------------------------------
@@ -109,7 +115,70 @@ function renderReference (kind, parameter, value) {
 }
 
 // ---------------------------------------------------------------------------
-// 8 项断言
+// 移调专用工具（规格 docs/pitch_shifter_spec.md §5）
+// ---------------------------------------------------------------------------
+
+/**
+ * 移调渲染：按 512 采样分块推进（subarray 保证每块偏移正确）。
+ * inputAt(i) 提供第 i 个采样；onBlock(blockIndex, effect) 可在渲染中改参数。
+ */
+function renderPitch (semitone, mix, level, rate, samples, inputAt, onBlock) {
+    const effect = new BuiltinEffect('pitch', rate);
+    effect.setParameterValue(0, semitone);
+    effect.setParameterValue(1, mix);
+    effect.setParameterValue(2, level);
+    effect.prepareToPlay(rate, 512);
+    const buffer = stereoBuffer(samples);
+    for (let i = 0; i < samples; ++i) {
+        buffer[0][i] = inputAt(i);
+        buffer[1][i] = inputAt(i);
+    }
+    for (let start = 0; start < samples; start += 512) {
+        const count = Math.min(512, samples - start);
+        if (onBlock)
+            onBlock(Math.floor(start / 512), effect);
+        effect.processBlock(buffer[0].subarray(start, start + count),
+            buffer[1].subarray(start, start + count), count);
+    }
+    return buffer;
+}
+
+/**
+ * 基频估计：上升过零间隔的中位数（零交叉测频）。
+ * 不用 FFT 谱峰——读头切换会把读位置跳 D = 1440 采样（约 0.6 个周期），
+ * 256 采样的交叉淡化只平滑幅度、消不掉相位跳变，湿声带 FM 味、频谱被展宽，
+ * 纯音谱线不可靠；基频本身是准的，过零间隔的中位数对相位抖动稳健。
+ */
+function estimatePitchFrequency (buffer, channel, start, count) {
+    const intervals = [];
+    let last = -1;
+    for (let i = start + 1; i < start + count; ++i) {
+        if (buffer[channel][i - 1] <= 0 && buffer[channel][i] > 0) {
+            if (last >= 0)
+                intervals.push(i - last);
+            last = i;
+        }
+    }
+    if (intervals.length < 8)
+        return 0;
+    intervals.sort((a, b) => a - b);
+    const median = intervals[Math.floor(intervals.length / 2)];
+    return PITCH_RATE / median;
+}
+
+/** 相邻采样最大差值（爆音 / 阶跃检测）。 */
+function maxAdjacentDelta (buffer, channel, start, count) {
+    let max = 0;
+    for (let i = start + 1; i < start + count; ++i) {
+        const delta = Math.abs(buffer[channel][i] - buffer[channel][i - 1]);
+        if (delta > max)
+            max = delta;
+    }
+    return max;
+}
+
+// ---------------------------------------------------------------------------
+// 12 项断言
 // ---------------------------------------------------------------------------
 
 const cases = [];
@@ -118,7 +187,7 @@ function testCase (name, fn) {
     cases.push({ name, fn });
 }
 
-testCase('1. 静音输入 → 输出静音（10 种效果器 × 3 个采样率）', () => {
+testCase('1. 静音输入 → 输出静音（11 种效果器 × 3 个采样率）', () => {
     for (const rate of [44100, 48000, 96000]) {
         for (const kind of ALL_KINDS) {
             const effect = new BuiltinEffect(kind, rate);
@@ -297,6 +366,112 @@ testCase('8. 新建的 delay 实例不得继承别的实例尾巴', () => {
     const buffer = stereoBuffer(RENDER_SAMPLES);
     fresh.processBlock(buffer[0], buffer[1], RENDER_SAMPLES);
     assertEqual(magnitude(buffer, 0, 0, RENDER_SAMPLES), 0, '新实例不应继承别的实例尾巴');
+});
+
+testCase('9. 移调：0 半音 → 输出与输入逐采样完全一致（直通 / 无额外延迟 / 无梳状失真）', () => {
+    const input = i => 0.4 * Math.sin(i * 2 * Math.PI * 220 / PITCH_RATE);
+    const straight = renderPitch(0, 1, 1, PITCH_RATE, PITCH_SAMPLES, input);
+    for (let i = 0; i < PITCH_SAMPLES; ++i) {
+        assertEqual(straight[0][i], input(i), `移调 0 半音左声道第 ${i} 个采样应与输入完全一致`);
+        assertEqual(straight[1][i], input(i), `移调 0 半音右声道第 ${i} 个采样应与输入完全一致`);
+    }
+    // 直通时既没有额外增益，也没有直流偏置。
+    assertNear(magnitude(straight, 0, 0, PITCH_SAMPLES), 0.4, 0.0001, '移调 0 半音的输出幅度');
+    const slew = maxAdjacentDelta(straight, 0, 0, PITCH_SAMPLES);
+    assertTrue(slew <= 0.02,
+        `移调 0 半音的相邻采样差值应不超过输入自身斜率（0.0115），实际 ${slew}`);
+});
+
+testCase('10. 移调：+12 半音升八度 / -12 半音降八度（基频估计）', () => {
+    const input = i => 0.4 * Math.sin(i * 2 * Math.PI * 220 / PITCH_RATE);
+    const start = 16384;
+    const count = 8192;
+    const base = renderPitch(0, 1, 1, PITCH_RATE, PITCH_SAMPLES, input);
+    const up = renderPitch(12, 1, 1, PITCH_RATE, PITCH_SAMPLES, input);
+    const down = renderPitch(-12, 1, 1, PITCH_RATE, PITCH_SAMPLES, input);
+    const baseHz = estimatePitchFrequency(base, 0, start, count);
+    const upHz = estimatePitchFrequency(up, 0, start, count);
+    const downHz = estimatePitchFrequency(down, 0, start, count);
+    // 零交叉测频在 8192 点窗口上误差约 ±1%（过零间隔取整带来），
+    // 读头切换带来的相位抖动不影响中位间隔，放宽到 ±10% 足够严。
+    assertNear(baseHz, 220, 220 * 0.10, '移调 0 半音的基频');
+    assertNear(upHz, 440, 440 * 0.10, '移调 +12 半音的基频');
+    assertNear(downHz, 110, 110 * 0.10, '移调 -12 半音的基频');
+    assertTrue(upHz > baseHz * 1.8,
+        `移调 +12 半音的基频应显著升高（实测 ${upHz.toFixed(1)} Hz，基准 ${baseHz.toFixed(1)} Hz）`);
+    assertTrue(downHz < baseHz * 0.65,
+        `移调 -12 半音的基频应显著降低（实测 ${downHz.toFixed(1)} Hz，基准 ${baseHz.toFixed(1)} Hz）`);
+    // 确实在做移调，而不是把输入原样放行。
+    assertTrue(difference(up, base) > 1,
+        `移调 +12 半音的波形应与原波形不同（Σ|Δ| = ${difference(up, base)}，需 > 1）`);
+    assertTrue(difference(down, base) > 1,
+        `移调 -12 半音的波形应与原波形不同（Σ|Δ| = ${difference(down, base)}，需 > 1）`);
+});
+
+testCase('11. 移调：参数连续切换 → 无 NaN/Inf、无削波、相邻采样差值受限', () => {
+    const input = i => 0.4 * Math.sin(i * 2 * Math.PI * 220 / PITCH_RATE);
+    const semis = [-12, 0, 12, -5, 7];
+    const buffer = renderPitch(0, 1, 1, PITCH_RATE, PITCH_SAMPLES, input, (block, effect) => {
+        // 每 64 采样轮换一次移调 / 干湿比 / 输出，逼出参数跳变路径。
+        const step = block * 512 / 64;
+        effect.setParameterValue(0, semis[step % semis.length]);
+        effect.setParameterValue(1, step % 2 ? 1 : 0.3);
+        effect.setParameterValue(2, step % 3 ? 1 : 0.4);
+    });
+    for (let i = 0; i < PITCH_SAMPLES; ++i) {
+        assertTrue(Number.isFinite(buffer[0][i]),
+            `移调切换过程中左声道第 ${i} 个采样出现非有限值：${buffer[0][i]}`);
+        assertTrue(Number.isFinite(buffer[1][i]),
+            `移调切换过程中右声道第 ${i} 个采样出现非有限值：${buffer[1][i]}`);
+    }
+    const peak = magnitude(buffer, 0, 0, PITCH_SAMPLES);
+    assertTrue(peak <= 0.45,
+        `移调切换过程中不应削波，峰值应 ≤ 0.45（输入幅度 0.4），实际 ${peak}`);
+    // 上限覆盖两种既有行为：参数平滑器在拉坡结束后按目标值瞬时跳变，
+    // 以及 256 采样交叉淡化窗口内再次切换读头会打断淡化（两端算法一致）。
+    const slew = maxAdjacentDelta(buffer, 0, 0, PITCH_SAMPLES);
+    assertTrue(slew <= 0.35,
+        `移调切换过程中的相邻采样差值应 ≤ 0.35，实际 ${slew}`);
+});
+
+testCase('12. 移调：单次 0 → +12 切换无爆音 / 湿声延迟落在 [D/2, 1.5D] / 两个实例互不影响', () => {
+    const input = i => 0.4 * Math.sin(i * 2 * Math.PI * 220 / PITCH_RATE);
+    const switched = renderPitch(0, 1, 1, PITCH_RATE, PITCH_SAMPLES, input, (block, effect) => {
+        if (block === 40)
+            effect.setParameterValue(0, 12);
+    });
+    // 单次切换时 256 采样交叉淡化生效，不应出现爆音。
+    const slew = maxAdjacentDelta(switched, 0, 0, PITCH_SAMPLES);
+    assertTrue(slew <= 0.05,
+        `移调单次切换不应爆音（相邻采样差值应 ≤ 0.05），实际 ${slew}`);
+    // 切换发生在第 20480 采样，等湿声完全接管（blend 的时间常数 15 ms ≈ 720 采样）后再测频。
+    const upHz = estimatePitchFrequency(switched, 0, 24576, 8192);
+    assertNear(upHz, 440, 440 * 0.10, '移调单次切换后的基频');
+
+    // 湿声延迟：冲激输入下首个湿声采样应落在读头允许的滞后区间 [D/2, 1.5D]。
+    const delay = Math.ceil(PITCH_RATE * 0.03);
+    const impulse = stereoBuffer(PITCH_SAMPLES);
+    impulse[0][0] = 0.5;
+    impulse[1][0] = 0.5;
+    const effect = new BuiltinEffect('pitch', PITCH_RATE);
+    effect.setParameterValue(0, 12);
+    effect.prepareToPlay(PITCH_RATE, 512);
+    effect.processBlock(impulse[0], impulse[1], PITCH_SAMPLES);
+    let firstWet = -1;
+    for (let i = 2; i < PITCH_SAMPLES; ++i) {
+        if (Math.abs(impulse[0][i]) > 0.01) {
+            firstWet = i;
+            break;
+        }
+    }
+    assertTrue(firstWet >= delay / 2 && firstWet <= delay * 1.5,
+        `移调湿声延迟应落在 [${delay / 2}, ${delay * 1.5}] 采样内，实际首个湿声采样在第 ${firstWet} 个采样`);
+
+    // 两个独立实例互不影响（状态不共享）。
+    const first = renderPitch(12, 1, 1, PITCH_RATE, PITCH_SAMPLES, input);
+    const second = renderPitch(12, 1, 1, PITCH_RATE, PITCH_SAMPLES, input);
+    assertEqual(difference(first, second), 0,
+        '移调两个独立实例输出应完全一致（不共享状态）');
 });
 
 // ---------------------------------------------------------------------------

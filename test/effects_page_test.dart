@@ -54,6 +54,7 @@ class FakeEffects extends EffectsBackend {
           'amp_chime': '英式清脆箱头',
           'amp_crunch': '英式摇滚箱头',
           'amp_modern': '现代高增益箱头',
+          'pitch': '移调 Pitch',
         }[kind],
         'kind': kind,
         'bypass': false,
@@ -102,6 +103,30 @@ class FakeEffects extends EffectsBackend {
                 },
                 {
                   'name': '箱体',
+                  'min': 0.0,
+                  'max': 1.0,
+                  'value': 1.0,
+                  'unit': '',
+                },
+              ]
+            : kind == 'pitch'
+            ? [
+                {
+                  'name': '移调',
+                  'min': -12.0,
+                  'max': 12.0,
+                  'value': 0.0,
+                  'unit': '半音',
+                },
+                {
+                  'name': '干湿比',
+                  'min': 0.0,
+                  'max': 1.0,
+                  'value': 1.0,
+                  'unit': '',
+                },
+                {
+                  'name': '输出',
                   'min': 0.0,
                   'max': 1.0,
                   'value': 1.0,
@@ -726,6 +751,48 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pumpWidget(const SizedBox());
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('移调效果可添加，三个旋钮独立调参并显示半音单位', (tester) async {
+    tester.view.physicalSize = const Size(1440, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pump();
+    final button = find.widgetWithText(OutlinedButton, '移调');
+    await tester.scrollUntilVisible(
+      button,
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(backend.plugins.map((p) => p['kind']), ['pitch']);
+    final semitone = find.byKey(const ValueKey('0-pitch-0'));
+    await tester.ensureVisible(semitone);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('0-pitch-1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('0-pitch-2')), findsOneWidget);
+    await tester.drag(semitone, const Offset(0, -60));
+    await tester.pump(const Duration(milliseconds: 100));
+    final value = backend.plugins[0]['parameters'][0]['value'] as double;
+    expect(value, greaterThan(0));
+    expect(value, lessThanOrEqualTo(12));
+    expect(backend.plugins[0]['parameters'][1]['value'], 1.0);
+    expect(backend.plugins[0]['parameters'][2]['value'], 1.0);
+    expect(find.text('PITCH'), findsOneWidget);
+    expect(find.textContaining('半音'), findsWidgets);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('启动期间后台停止，回到前台自动恢复监听', (tester) async {

@@ -346,6 +346,7 @@ class _Pedal extends StatelessWidget {
       'reverb' => (const Color(0xFF625383), 'REVERB', '空间漫游 / 混响'),
       'overdrive' => (const Color(0xFF497753), 'OVERDRIVE', '温暖饱和 / 过载'),
       'delay' => (const Color(0xFF356E91), 'DELAY', '时间回声 / 延迟'),
+      'pitch' => (const Color(0xFF1F8A8C), 'PITCH', '升降半音 / 移调'),
       _ => (const Color(0xFF52616C), 'VST3', '外部音色'),
     };
     final bypass = plugin['bypass'] == true;
