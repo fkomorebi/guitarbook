@@ -132,6 +132,19 @@ class MetronomeController extends ChangeNotifier {
     });
   }
 
+  /// 播放位置；没有运行、或音频设备异常时返回 null。
+  ///
+  /// 工作台用它给低音循环找相位：位置是从播放开始累计的时间，
+  /// 对小节长度取模就是当前落在小节的第几拍。
+  Duration? get position {
+    if (!running) return null;
+    try {
+      return sound ? _audio.position : _visualClock.elapsed;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 播放位置落在第几拍（从 0 开始）。
   ///
   /// bpm 是每分钟四分音符数，一拍的长度按拍分母缩放：四分音符一拍为 60/bpm 秒，

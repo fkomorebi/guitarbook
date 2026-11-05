@@ -16,6 +16,8 @@ import '../jam_recording/recording_audio.dart';
 import '../jam_recording/jam_recorder.dart';
 import '../jam_recording/save_recording.dart';
 import '../metronome/metronome_pattern.dart';
+import '../smart_bass/smart_bass_controller.dart';
+import '../smart_bass/smart_bass_panel.dart';
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -40,6 +42,7 @@ class DrumsPage extends StatefulWidget {
 
 class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
   late final MetronomeController _controller;
+  late final SmartBassController _smartBass;
   final _recordingOutputs = <RecordingAudio>{};
   late final SharedLoopInput _sharedInput;
   late final LooperController _looper;
@@ -152,7 +155,24 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
       patternBuilder: (bpm) =>
           renderDrums(bpm, _hits, _muted, _swing, meter: _meter),
     )..addListener(_refresh);
+    // 智能base复用工作台的输入通道，不再单独打开麦克风。
+    _smartBass = SmartBassController(
+      input: _sharedInput.lease(),
+      audioFactory: () => _tap(createLoopAudio()),
+      drumPosition: () => _controller.position,
+    )..addListener(_refresh);
+    _syncGroove();
     WidgetsBinding.instance.addObserver(this);
+  }
+
+  /// 把鼓机当前的编排同步给智能base，保证低音和鼓机在同一张网格上。
+  void _syncGroove() {
+    _smartBass.setGroove(
+      bpm: _controller.bpm,
+      meter: _meter,
+      hits: _hits,
+      swing: _swing,
+    );
   }
 
   void _refresh() => setState(() {});
@@ -163,6 +183,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
       beats: _meter.beats,
       beatDenominator: _meter.denominator,
     );
+    // 鼓件的落点变了，智能base要按同一套落点重新编排低音。
+    _syncGroove();
   }
 
   @override
@@ -171,6 +193,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
       _controller.stop();
       _recorder.stop();
       _stopPreview();
+      // 后台释放输入，避免一直占着麦克风。
+      unawaited(_smartBass.disable());
     }
   }
 
@@ -182,6 +206,9 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
     _recorder.removeListener(_refresh);
     _recorder.dispose();
     _stopPreview();
+    _smartBass.removeListener(_refresh);
+    // 先释放智能base，它还占着共享输入通道的一路租约。
+    _smartBass.dispose();
     if (widget.looperController == null) _looper.dispose();
     _sharedInput.dispose();
     super.dispose();
@@ -200,7 +227,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
             backgroundColor: scheme.surfaceContainerLowest,
             title: const Text('即兴工作台'),
             actions: [
-              if (_capturing || _recorder.recording)
+              if (_capturing || _recorder.recording || _smartBass.listening)
                 Tooltip(
                   message: '音频输入正在使用',
                   child: Padding(
@@ -223,6 +250,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                         '先选一个鼓机律动，点击开始伴奏；再用 Looper 录下吉他并逐层叠录。\n\n'
                         '点击鼓件名称可静音，点击格子编辑十六分音符。修改鼓机参数会从首拍重启。窄屏用分页查看全部鼓点。\n\n'
                         '拍号可选 4/4、3/4、2/4、5/4、6/8、7/8，切换后自动载入该拍号的默认节奏，速度与音量保持不变。x/4 拍号一拍是四分音符，x/8 拍号一拍是八分音符，网格始终按十六分音符划分，摇摆会把每个八分音符的后半拍往后拖。\n\n'
+                        '「智能base」会听你弹的和弦，按当前速度、拍号和底鼓落点自动编排一条低音：开启后弹一个和弦，它会在下一拍落下新根音，并一直跟着鼓机循环。风格可在跟底鼓、根音律动、走动低音之间切换，低音音量独立可调。它和 Looper、即兴录音共用同一个输入通道，不会重复打开麦克风。\n\n'
                         '录音与鼓机独立循环，不自动对拍。下方效果器会静音检测引擎和声卡，手动开始监听；鼓机音量、Looper 回放音量与效果器输出音量可独立调节。Android / iOS / Linux / Windows 的 Looper 录入效果器处理后的声音，需先开始监听并设为 48 kHz；其他平台录原始输入。请用耳机避免伴奏串入录音。\n\n'
                         '顶部“即兴录音”可录下三路混音，内存满后覆盖最早片段；停止后可试听或保存 WAV。进入后台会停止播放与采集；离开工作台清空未保存录音和设置。声音受系统音量影响，蓝牙可能增加延迟。',
                       ),
@@ -294,6 +322,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                             const SizedBox(height: 16),
                             loop,
                           ],
+                          const SizedBox(height: 16),
+                          SmartBassPanel(controller: _smartBass),
                           const SizedBox(height: 16),
                           EffectsPage(
                             key: const ValueKey('jam-effects'),
@@ -787,7 +817,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
             IconButton(
               tooltip: '减慢 1 BPM',
               visualDensity: VisualDensity.compact,
-              onPressed: c.bpm > 30 ? () => c.configure(bpm: c.bpm - 1) : null,
+              onPressed: c.bpm > 30 ? () => _setBpm(c.bpm - 1) : null,
               icon: const Icon(Icons.remove),
             ),
             Expanded(
@@ -797,19 +827,25 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                 max: 240,
                 divisions: 210,
                 label: '${c.bpm} BPM',
-                onChanged: (v) => c.configure(bpm: v.round()),
+                onChanged: (v) => _setBpm(v.round()),
               ),
             ),
             IconButton(
               tooltip: '加快 1 BPM',
               visualDensity: VisualDensity.compact,
-              onPressed: c.bpm < 240 ? () => c.configure(bpm: c.bpm + 1) : null,
+              onPressed: c.bpm < 240 ? () => _setBpm(c.bpm + 1) : null,
               icon: const Icon(Icons.add),
             ),
           ],
         ),
       ],
     );
+  }
+
+  /// 改速度：鼓机与智能base都要按新速度重新编排。
+  void _setBpm(int bpm) {
+    _controller.configure(bpm: bpm);
+    _syncGroove();
   }
 
   Widget _grid(BuildContext context, {bool compact = false}) => LayoutBuilder(
