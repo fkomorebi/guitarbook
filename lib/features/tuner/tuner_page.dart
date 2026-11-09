@@ -8,6 +8,7 @@ import 'package:record/record.dart';
 import 'automatic_string_selector.dart';
 import 'pitch_detector.dart';
 import 'tuning_feedback.dart';
+import 'tuning_reference.dart';
 
 class TunerPage extends StatefulWidget {
   const TunerPage({super.key});
@@ -26,6 +27,7 @@ class _TunerPageState extends State<TunerPage> with WidgetsBindingObserver {
   int _generation = 0;
   int _selected = 0;
   bool _automatic = true;
+  TuningReference _reference = TuningReference.standard;
   final _selector = AutomaticStringSelector();
   final _feedback = TuningFeedback();
   final _clock = Stopwatch()..start();
@@ -117,7 +119,7 @@ class _TunerPageState extends State<TunerPage> with WidgetsBindingObserver {
       if (_automatic) {
         final selected = _selector.update(frequency, now);
         if (selected == null) {
-          _feedback.update(null, guitarStrings[_selected].frequency, now);
+          _feedback.update(null, _reference.stringFrequency(_selected), now);
           // Keep the last reading while a new candidate is being confirmed.
           if (frequency != null) _feedback.interruptConfirmation();
           return;
@@ -127,7 +129,7 @@ class _TunerPageState extends State<TunerPage> with WidgetsBindingObserver {
           _feedback.reset();
         }
       }
-      _feedback.update(frequency, guitarStrings[_selected].frequency, now);
+      _feedback.update(frequency, _reference.stringFrequency(_selected), now);
     });
   }
 
@@ -160,7 +162,7 @@ class _TunerPageState extends State<TunerPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final target = guitarStrings[_selected];
+    final target = _reference.strings[_selected];
     final cents = _feedback.cents;
     final frequency = _feedback.frequency(target.frequency);
     final status = cents == null
@@ -187,7 +189,31 @@ class _TunerPageState extends State<TunerPage> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('标准调弦 · A4 = 440 Hz'),
+                  Text('标准调弦 · A4 = ${_reference.a4.toStringAsFixed(0)} Hz'),
+                  const SizedBox(height: 12),
+                  SegmentedButton<TuningReference>(
+                    segments: const [
+                      ButtonSegment(
+                        value: TuningReference.standard,
+                        label: Text('A4 = 440 Hz'),
+                      ),
+                      ButtonSegment(
+                        value: TuningReference.natural,
+                        label: Text('A4 = 432 Hz'),
+                      ),
+                    ],
+                    selected: {_reference},
+                    onSelectionChanged: (selection) => setState(() {
+                      _reference = selection.first;
+                      // 基准变了目标频率就变了，读数与已确认的弦都要重新开始。
+                      _selector.reference = _reference;
+                      _feedback.reset();
+                      _bytes.clear();
+                    }),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(_reference.description),
+                  const SizedBox(height: 12),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('自动识别琴弦'),

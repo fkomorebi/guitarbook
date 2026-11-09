@@ -12,7 +12,7 @@ A Flutter guitar toolkit for practicing and improvising: build a groove with the
 - **One workspace:** the home screen now shows a single “Jam workspace” card — the separate live-effects entry was removed, because the effects already live in the workspace. Opening it gives drums, Looper and effects on one scrolling page with separate volume controls; the pedalboard sits at the bottom of the page, so scroll down to reach it. Entering the workspace only probes the effects engine and the audio devices and does not start monitoring on its own, so press the monitoring control in the effects area to hear your guitar. On Android, iOS, Linux and Windows, the Looper captures the processed signal after the effects chain; monitoring must be active and the actual sample rate must be 48 kHz.
 - **Smart bass:** a new automatic bass line in the workspace. It recognises the chord you are playing and arranges a bass line that matches the drum machine's BPM, time signature and kick pattern, sample-for-sample as long as one drum bar; three styles (follow the kick, root pulse, walking bass), its own volume, chord changes land on the next beat, and switching it off releases the microphone.
 
-The toolkit also includes a standard-tuning guitar tuner, metronome, scale fretboard and beginner chord lessons. README translations do not imply a translated app interface.
+The toolkit also includes a standard-tuning guitar tuner with a selectable A4 = 440 Hz / 432 Hz reference, metronome, scale fretboard and beginner chord lessons. README translations do not imply a translated app interface.
 
 ## Platform status
 
@@ -29,6 +29,8 @@ Implementation and verification are separate. Existing platform projects do not 
 
 Smart bass shares the same pure-Dart implementation on all six platforms; only the Linux Debug, Windows Debug and Web Release builds have been verified, and real playing by ear on every platform is still unverified.
 
+The tuner is available on all six platforms and shares one capture and string-detection path; the A4 = 440 Hz / 432 Hz reference can be switched at the top of the page. The 432 Hz mode is implemented and passes the local static analysis and the full Flutter test suite, but the real-device tuning effect with a microphone under that reference is still pending on every platform.
+
 ## Start playing
 
 1. Run from source, then open the jam workspace from the home screen (the “Jam workspace” card; there is no separate live-effects entry any more). The page stacks the drum machine, the Looper and the effects board in one scrolling column — the effects board is at the bottom, so scroll down for it. Pick a time signature, choose a groove for it and press the start control. Switching the time signature loads that signature's default groove and keeps your tempo and volume.
@@ -38,6 +40,8 @@ Smart bass shares the same pure-Dart implementation on all six platforms; only t
 5. To drop a single recorded layer, tap the **×** in the top-right corner of that layer's tile in the layer strip. The remaining layers keep the same loop length and stay in phase; the hint bar offers one **Undo** for the deletion. Deleting the last remaining layer stops the loop and resets the loop length. Deleting is refused while recording or while the loop is still loading.
 
 Use headphones to avoid feedback and recording the backing track. Drums require no microphone permission; recording, tuning and live effects require audio-input access. Android requires API 24 or later. Apple platforms require microphone permission; Windows must allow microphone access. Linux raw-input recording requires `parecord`, `pactl` and `ffmpeg`. Web requires HTTPS or localhost, microphone permission and a user gesture to unlock audio.
+
+The tuner page carries a reference control at the top: the title reads “标准调弦 · A4 = 440 Hz” or “标准调弦 · A4 = 432 Hz” (the app interface itself is Chinese), and the segmented control under it switches between A4 = 440 Hz (the international standard — the target frequencies are the usual ones) and A4 = 432 Hz (natural tuning — every target frequency sits about 31.8 cents below the 440 Hz one). In the 432 Hz mode the six open strings are scaled by 432 / 440, while automatic detection, manual string selection, the cent deviation and the in-tune zone stay exactly the same. Switching the reference clears the current reading and the automatic detection confirmation, so pluck a string again. The choice is session-only and is not persisted: leaving the page or restarting the app returns to 440 Hz. Only the standard six-string EADGBE tuning is supported; other tunings and custom reference pitches are not offered.
 
 Add “哇音 Wah” and drag its position knob to sweep 350–2200 Hz (position 0–1, default 0.5). Resonance Q is 0.5–8 (2), mix 0–1 (1), and output 0–1 (0.7). Switch between manual (default) and automatic modes on the pedal. Automatic mode exposes speed (0.1–5 Hz, default 1) and depth (0–1, default 0.8), sweeping around the position setting. On Linux and Windows desktop, and in a desktop browser, an optional gamepad analog trigger can drive the wah position as an expression pedal (see below). Wah shares Android/iOS/Linux/Windows DSP; device listening remains unverified.
 
