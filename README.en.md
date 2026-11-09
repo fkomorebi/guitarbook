@@ -152,7 +152,7 @@ Enable it once (repository admin required):
 
 Published at <https://fkomorebi.github.io/guitarbook/>
 
-First run (2026-11-09): dependency install, static analysis and tests all passed; the run stopped at “Configure GitHub Pages” because Pages was not enabled yet, and GitHub answered `Get Pages site failed … Not Found`. After step 1 above, re-run the workflow from the Actions tab — no code change is needed. Pull request runs never touch Pages, so they do not require this setting.
+First publish (2026-11-09): the first run passed dependency install, static analysis and tests but stopped at “Configure GitHub Pages” because Pages was not enabled yet (`Get Pages site failed … Not Found`). After step 1 above, the re-run (run #2) passed every step and the site is live. Pull request runs never touch Pages, so they do not require this setting.
 
 | Step | Purpose |
 | --- | --- |
@@ -163,7 +163,7 @@ First run (2026-11-09): dependency install, static analysis and tests all passed
 
 Notes:
 
-- Until **Source** is set to GitHub Actions in Settings → Pages, a run triggered by a push to `main` fails at the “Configure GitHub Pages” step (`Get Pages site failed … Not Found`); this is a one-time setting, and re-running the workflow afterwards is enough.
+- **Source** is set to GitHub Actions in Settings → Pages (done on 2026-11-09). If it is ever reset, a run triggered by a push to `main` fails at the “Configure GitHub Pages” step (`Get Pages site failed … Not Found`); set it again and re-run the workflow.
 - Microphone access requires HTTPS or localhost; the `https://` GitHub Pages URL qualifies, and the browser still asks for permission on the first visit.
 - The page ships a Service Worker, so a stale version may stay cached for a short while after a deploy; force a refresh (Ctrl / Cmd + Shift + R) if the new version does not show up.
 - CJK fallback fonts are still downloaded at runtime from `fonts.gstatic.com`. If that domain is unreachable, Chinese text renders as boxes; bundling a CJK font inside the app is required for fully offline use.

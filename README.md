@@ -261,7 +261,7 @@ Linux 可安装 `pulseaudio-utils` 和 `ffmpeg` 以提供上述命令。Web 使�
 
 发布地址：<https://fkomorebi.github.io/guitarbook/>
 
-2026-11-09 首次运行结果：依赖安装、静态分析与测试均通过，失败点是 “Configure GitHub Pages” 步骤——仓库当时还没启用 Pages，GitHub 返回 `Get Pages site failed … Not Found`。完成上面第 1 步后在 Actions 页重新运行即可，不必修改代码。Pull Request 的运行不涉及 Pages 配置，因此不需要先启用。
+2026-11-09 首次发布记录：第一次运行（run #1）依赖安装、静态分析与测试都通过，失败在 “Configure GitHub Pages” 步骤——当时仓库还没启用 Pages，GitHub 返回 `Get Pages site failed … Not Found`；按上面第 1 步启用后重跑（run #2）全部步骤通过，站点已上线。Pull Request 的运行不涉及 Pages 配置，因此不需要先启用。
 
 | 工作流步骤 | 说明 |
 | --- | --- |
@@ -272,7 +272,7 @@ Linux 可安装 `pulseaudio-utils` 和 `ffmpeg` 以提供上述命令。Web 使�
 
 注意事项：
 
-- 在 Settings → Pages 里把 Source 选为 GitHub Actions 之前，推送 `main` 触发的运行会在 “Configure GitHub Pages” 步骤失败（报错 `Get Pages site failed … Not Found`）；这个设置只需做一次，之后在 Actions 页重新运行即可。
+- 该设置已在 2026-11-09 完成（Settings → Pages → Source = GitHub Actions）。若以后被重置，推送 `main` 触发的运行会在 “Configure GitHub Pages” 步骤失败（报错 `Get Pages site failed … Not Found`），重新设置后在 Actions 页重跑即可。
 - 麦克风需要 HTTPS 或 localhost 才能授权，GitHub Pages 的 `https://` 地址满足要求；首次访问仍需在浏览器里允许使用麦克风。
 - 页面带 Service Worker，发布后短时间内旧版本可能仍被缓存；看不到新版本时强制刷新（Ctrl / Cmd + Shift + R）或等待缓存过期。
 - 运行时中文字体仍由 Flutter 引擎从 `fonts.gstatic.com` 下载回退字体；若网络无法访问该域名，界面中文会显示为方框，需要在应用内自带中文字体才能完全离线。
