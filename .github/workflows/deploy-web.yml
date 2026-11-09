@@ -42,8 +42,11 @@ jobs:
       - name: Test
         run: flutter test
 
+      # 只在真正发布时配置 Pages：仓库尚未在 Settings → Pages 里启用时，configure-pages 会直接失败。
+      # Pull Request 不需要 Pages 配置，base_path 为空时下面的 --base-href 退化为根路径 /，仍可验证构建。
       - name: Configure GitHub Pages
         id: pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v6
 
       # --base-href 使用仓库的 Pages 根路径（/guitarbook/），子路径部署时资源路径才不会 404。

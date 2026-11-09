@@ -148,9 +148,11 @@ The repository ships `.github/workflows/deploy-web.yml`: pushing to `main` makes
 Enable it once (repository admin required):
 
 1. Open **Settings → Pages** and set **Build and deployment → Source** to **GitHub Actions**.
-2. Push to `main`, or run the “Deploy Web to GitHub Pages” workflow manually from the **Actions** tab.
+2. Go back to the **Actions** tab and run “Deploy Web to GitHub Pages” (manually or via re-run), or push to `main` again.
 
 Published at <https://fkomorebi.github.io/guitarbook/>
+
+First run (2026-11-09): dependency install, static analysis and tests all passed; the run stopped at “Configure GitHub Pages” because Pages was not enabled yet, and GitHub answered `Get Pages site failed … Not Found`. After step 1 above, re-run the workflow from the Actions tab — no code change is needed. Pull request runs never touch Pages, so they do not require this setting.
 
 | Step | Purpose |
 | --- | --- |
@@ -161,7 +163,7 @@ Published at <https://fkomorebi.github.io/guitarbook/>
 
 Notes:
 
-- Until **Source** is set to GitHub Actions in Settings → Pages, the deploy step fails; this is a one-time setting.
+- Until **Source** is set to GitHub Actions in Settings → Pages, a run triggered by a push to `main` fails at the “Configure GitHub Pages” step (`Get Pages site failed … Not Found`); this is a one-time setting, and re-running the workflow afterwards is enough.
 - Microphone access requires HTTPS or localhost; the `https://` GitHub Pages URL qualifies, and the browser still asks for permission on the first visit.
 - The page ships a Service Worker, so a stale version may stay cached for a short while after a deploy; force a refresh (Ctrl / Cmd + Shift + R) if the new version does not show up.
 - CJK fallback fonts are still downloaded at runtime from `fonts.gstatic.com`. If that domain is unreachable, Chinese text renders as boxes; bundling a CJK font inside the app is required for fully offline use.

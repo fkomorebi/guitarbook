@@ -148,9 +148,11 @@ flutter run -d <device-id>
 有効化は一度だけ（リポジトリ管理者権限が必要です）：
 
 1. **Settings → Pages** を開き、**Build and deployment → Source** で **GitHub Actions** を選びます。
-2. `main` に push するか、**Actions** タブから “Deploy Web to GitHub Pages” を手動実行します。
+2. **Actions** タブに戻って “Deploy Web to GitHub Pages” を実行（手動実行または再実行）するか、もう一度 `main` に push します。
 
 公開先：<https://fkomorebi.github.io/guitarbook/>
+
+初回実行（2026-11-09）：依存関係の取得・静的解析・テストはいずれも成功しましたが、Pages が未有効だったため「Configure GitHub Pages」ステップで `Get Pages site failed … Not Found` とともに停止しました。上の手順 1 を済ませれば、Actions タブから再実行するだけで済み、コードの変更は不要です。Pull Request の実行は Pages 設定を使わないため、この設定は不要です。
 
 | ステップ | 内容 |
 | --- | --- |
@@ -161,7 +163,7 @@ flutter run -d <device-id>
 
 注意：
 
-- Settings → Pages の Source を GitHub Actions に指定するまではデプロイ手順が失敗します。この設定は一度だけで済みます。
+- Settings → Pages の Source を GitHub Actions に指定するまでは、`main` への push で起動した実行が「Configure GitHub Pages」ステップで失敗します（`Get Pages site failed … Not Found`）。この設定は一度だけで済み、設定後は実行をやり直すだけで公開されます。
 - マイクは HTTPS または localhost でのみ許可されます。GitHub Pages の `https://` URL は条件を満たしますが、初回アクセス時にブラウザーの許可が必要です。
 - ページに Service Worker が含まれるため、公開直後は古い版がキャッシュされることがあります。最新版が表示されない場合は強制再読み込み（Ctrl / Cmd + Shift + R）してください。
 - 実行時の中文字体は Flutter エンジンが `fonts.gstatic.com` からフォールバックとして取得します。同ドメインに接続できない環境では中文が豆腐（□）表示になるため、完全にオフラインで使うにはアプリ内に中文字体を同梱する必要があります。
