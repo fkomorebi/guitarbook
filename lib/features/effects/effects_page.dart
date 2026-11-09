@@ -8,6 +8,7 @@ import '../expression_pedal/expression_pedal_panel.dart';
 import '../expression_pedal/gamepad_trigger.dart';
 import 'effects_backend.dart';
 import 'pedal_board.dart';
+import 'scanned_plugin.dart';
 
 class EffectsPage extends StatefulWidget {
   const EffectsPage({
@@ -31,6 +32,21 @@ class EffectsPage extends StatefulWidget {
 class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
   late final _backend = widget.backend ?? EffectsBackend();
   final _path = TextEditingController();
+
+  /// 额外扫描目录（多个路径用 ; 分隔）。
+  final _scanPaths = TextEditingController();
+
+  /// 上一次扫描的结果。
+  ///
+  /// 宿主的 `scan` 响应不是效果链状态对象，所以单独保存，不写进 [_status]。
+  PluginScanResult? _scanResult;
+
+  /// 正在扫描插件目录。
+  bool _scanning = false;
+
+  /// 扫描失败时的提示。
+  String? _scanError;
+
   Map<String, dynamic> _status = {};
   Timer? _timer;
   bool _busy = false;
@@ -80,6 +96,40 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
   double get _visibleLatencyMs =>
       _captureLatencyMs + ((_status['latencyMs'] as num?)?.toDouble() ?? 0);
 
+  /// 宿主上报的可用音频后端：Windows 下包含 ASIO。
+  List<String> get _deviceTypes =>
+      (_status['deviceTypes'] as List<dynamic>? ?? [])
+          .map((dynamic value) => value.toString())
+          .where((String value) => value.isNotEmpty)
+          .toList();
+
+  /// 宿主上报的 ASIO 驱动：Windows 专属，其他平台为空。
+  List<String> get _asioDrivers =>
+      (_status['asioDrivers'] as List<dynamic>? ?? [])
+          .map((dynamic value) => value.toString())
+          .where((String value) => value.isNotEmpty)
+          .toList();
+
+  /// 宿主上报的输入通道名：声卡可能有多路输入，吉他常插在第 2 路。
+  List<String> get _inputChannelNames =>
+      (_status['inputChannelNames'] as List<dynamic>? ?? [])
+          .map((dynamic value) => value.toString())
+          .where((String value) => value.isNotEmpty)
+          .toList();
+
+  /// 各输入通道的瞬时电平（0~1），用于判断吉他插在哪一路。
+  List<double> get _inputChannelLevels =>
+      (_status['inputChannelLevels'] as List<dynamic>? ?? [])
+          .map((dynamic value) => (value as num?)?.toDouble() ?? 0)
+          .toList();
+
+  /// 当前正在监听的输入通道序号；-1 表示还没有信号。
+  int get _activeInputChannel =>
+      (_status['activeInputChannel'] as num?)?.toInt() ?? -1;
+
+  /// 是否自动跟随信号最强的输入通道。
+  bool get _autoInputChannel => _status['autoInputChannel'] == true;
+
   /// 采集链路说明：低延迟插入式流还是兼容路径。
   String get _capturePathNote {
     final path = _status['capturePath']?.toString() ?? '';
@@ -127,6 +177,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
   Future<void> _poll() async {
     if (!_connected ||
         _busy ||
+        _scanning ||
         _polling ||
         _adjustingGain ||
         _adjustingParameter) {
@@ -187,6 +238,44 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
       if (mounted) setState(() => _error = '$error');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 额外扫描目录：输入框里用 ; 分隔的路径，留空表示只扫默认位置。
+  List<String> get _extraScanPaths => _scanPaths.text
+      .split(RegExp(r'[;；\r\n]'))
+      .map((String value) => value.trim())
+      .where((String value) => value.isNotEmpty)
+      .toList();
+
+  /// 扫描已安装的 VST2 / VST3 插件。
+  ///
+  /// 宿主的 `scan` 响应不是效果链状态对象，所以结果单独保存，不能写进 [_status]。
+  Future<void> _runScan() async {
+    if (_scanning || _busy) return;
+    if (!_backend.supportsPluginScan) {
+      setState(() => _scanError = '当前平台不支持扫描 VST 插件。');
+      return;
+    }
+    // 让正在路上的状态轮询结果作废，避免扫描期间状态被旧数据覆盖。
+    _revision++;
+    setState(() {
+      _scanning = true;
+      _scanError = null;
+    });
+    try {
+      final result = await _backend.send('scan', {'paths': _extraScanPaths});
+      if (!mounted) return;
+      setState(() {
+        _scanResult = PluginScanResult.fromJson(result);
+        _scanning = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _scanError = '$error';
+        _scanning = false;
+      });
     }
   }
 
@@ -371,6 +460,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
     _pedal.removeListener(_onPedalChanged);
     _pedal.dispose();
     _path.dispose();
+    _scanPaths.dispose();
     unawaited(_backend.dispose());
     super.dispose();
   }
@@ -380,6 +470,8 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
     final theme = Theme.of(context);
     final supported = _backend.supported;
     final canEdit = supported && !_busy;
+    // 扫描期间宿主正在遍历插件目录，此时不再叠加加载命令。
+    final canLoad = canEdit && !_scanning && _plugins.length < 8;
     // 监听中也能打开设备设置：声卡重连或输入通道选错时必须能立刻改。
     final canConfigure = canEdit;
     final content = Center(
@@ -501,7 +593,9 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                       '监听已开始，但采到的全是数字静音。常见原因：系统或应用的输入'
                       '设备不是吉他所在接口（Linux 上声卡常被拆成麦克风、回环通道，'
                       '例如 “Monitor Input”），或声卡刚刚重连。声卡直通监听有声，'
-                      '不代表软件已经采到信号。',
+                      '不代表软件已经采到信号；也可能是吉他插在第 2 路，'
+                      '而软件监听了空着的第 1 路——在下方「声卡设置与延迟诊断」'
+                      '里可以看各路输入电平并手动改通道。',
                     ),
                     const SizedBox(height: 8),
                     Wrap(
@@ -675,16 +769,118 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
               Card(
                 child: ExpansionTile(
                   key: const PageStorageKey('effects-vst3'),
-                  title: const Text('外部 VST3 插件'),
-                  subtitle: const Text('加载已安装的插件'),
+                  title: const Text('外部插件（VST2 / VST3）'),
+                  subtitle: Text(
+                    _scanResult?.summaryLine ??
+                        '扫描已安装的插件，或输入绝对路径加载',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  expandedCrossAxisAlignment: CrossAxisAlignment.start,
                   childrenPadding: const EdgeInsets.all(16),
                   children: [
+                    if (_backend.supportsPluginScan) ...[
+                      const Text('扫描已安装的 VST2 / VST3 插件，找到后可直接加载；也可在下方输入插件的绝对路径。'),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        key: const ValueKey('effects-scan'),
+                        onPressed: canEdit && !_scanning ? _runScan : null,
+                        icon: _scanning
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.search),
+                        label: Text(_scanning ? '扫描中…' : '扫描已安装插件'),
+                      ),
+                      const SizedBox(height: 8),
+                      ExpansionTile(
+                        key: const PageStorageKey('effects-scan-paths'),
+                        tilePadding: EdgeInsets.zero,
+                        childrenPadding: const EdgeInsets.only(bottom: 8),
+                        title: const Text('高级：额外扫描目录'),
+                        subtitle: const Text('多个目录用 ; 分隔，留空则只扫默认位置'),
+                        children: [
+                          TextField(
+                            key: const PageStorageKey('effects-scan-paths-field'),
+                            controller: _scanPaths,
+                            enabled: canEdit && !_scanning,
+                            decoration: const InputDecoration(
+                              labelText: '额外扫描目录',
+                              hintText: r'D:\Plugins; C:\VST3',
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (_scanning) ...[
+                        const SizedBox(height: 8),
+                        const LinearProgressIndicator(),
+                        const SizedBox(height: 8),
+                        const Text('正在扫描插件目录，可能需要十几秒…'),
+                      ],
+                      if (_scanError != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          _scanError!,
+                          style: TextStyle(color: theme.colorScheme.error),
+                        ),
+                      ],
+                      if (_scanResult != null) ...[
+                        const SizedBox(height: 8),
+                        Text(_scanResult!.summaryLine),
+                        if (_scanResult!.directories.isNotEmpty)
+                          ExpansionTile(
+                            key: const ValueKey('effects-scan-directories'),
+                            tilePadding: EdgeInsets.zero,
+                            childrenPadding: EdgeInsets.zero,
+                            title: Text(
+                              '已扫描目录（${_scanResult!.directories.length}）',
+                            ),
+                            children: [
+                              for (final directory in _scanResult!.directories)
+                                Text(
+                                  directory,
+                                  style: theme.textTheme.bodySmall,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                            ],
+                          ),
+                        if (_scanResult!.errors.isNotEmpty)
+                          ExpansionTile(
+                            key: const ValueKey('effects-scan-errors'),
+                            tilePadding: EdgeInsets.zero,
+                            childrenPadding: EdgeInsets.zero,
+                            title: Text(
+                              '扫描过程中的问题（${_scanResult!.errors.length}）',
+                            ),
+                            children: [
+                              for (final error in _scanResult!.errors)
+                                Text(
+                                  '· $error',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.error,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        const SizedBox(height: 8),
+                        if (_scanResult!.plugins.isEmpty)
+                          const Text('没有发现可识别的 VST2 / VST3 插件。')
+                        else
+                          for (final plugin in _scanResult!.plugins)
+                            _scannedPluginRow(plugin, canLoad: canLoad),
+                        const Divider(height: 32),
+                      ],
+                    ] else
+                      const Text('当前平台不支持扫描已安装的 VST 插件，可手动输入插件的绝对路径加载。'),
                     const Text('也可加载当前系统和 CPU 架构对应的 .vst3 插件，输入插件的绝对路径。'),
                     const SizedBox(height: 12),
                     TextField(
                       key: const PageStorageKey('effects-vst3-path'),
                       controller: _path,
-                      enabled: canEdit,
+                      enabled: canEdit && !_scanning,
                       decoration: const InputDecoration(
                         labelText: 'VST3 插件绝对路径',
                         hintText: '/home/you/.vst3/MyEffect.vst3',
@@ -694,7 +890,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                     Align(
                       alignment: Alignment.centerLeft,
                       child: OutlinedButton.icon(
-                        onPressed: canEdit && _plugins.length < 8
+                        onPressed: canLoad
                             ? () => _send('load', {'path': _path.text.trim()})
                             : null,
                         icon: const Icon(Icons.add),
@@ -739,10 +935,67 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                     Text(
                       '${_status['backend'] ?? ''} · ${_status['device'] ?? ''}',
                     ),
+                    if (_deviceTypes.isNotEmpty) ...[
+                      Text('可用后端：${_deviceTypes.join('、')}'),
+                      if (_asioDrivers.isNotEmpty)
+                        Text('ASIO 驱动：${_asioDrivers.join('、')}'),
+                      if (_asioDrivers.isNotEmpty)
+                        const Text(
+                          '换用 ASIO：点「声卡与输入通道」，把设备类型切换为 ASIO 并选择上面的驱动；'
+                          '采样率与缓冲在驱动自带控制面板里设好，回来再选 64 或 128 帧。',
+                        )
+                      else if (_deviceTypes.contains('ASIO'))
+                        const Text(
+                          '已启用 ASIO 后端，但系统里没有找到已安装的 ASIO 驱动；'
+                          '请先安装声卡厂商的 ASIO 驱动，再回到「声卡与输入通道」切换。',
+                        ),
+                    ],
                     if (_status['inputDevice'] != null)
                       Text(
                         '输入：${_status['inputDevice']}\n输出：${_status['outputDevice']}',
                       ),
+                    if (_inputChannelNames.length > 1) ...[
+                      Text(
+                        '输入通道：'
+                        '${_autoInputChannel ? '自动跟随最强信号' : '固定第 ${_activeInputChannel + 1} 路'}'
+                        '${_activeInputChannel >= 0 ? '（当前监听第 ${_activeInputChannel + 1} 路）' : '（暂无信号）'}',
+                      ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('自动'),
+                            selected: _autoInputChannel,
+                            onSelected: canConfigure
+                                ? (_) => _send('inputChannel', {'auto': true})
+                                : null,
+                          ),
+                          for (var i = 0; i < _inputChannelNames.length; i++)
+                            ChoiceChip(
+                              label: Text('通道 ${i + 1}'),
+                              selected:
+                                  !_autoInputChannel && _activeInputChannel == i,
+                              onSelected: canConfigure
+                                  ? (_) => _send('inputChannel', {'index': i})
+                                  : null,
+                            ),
+                        ],
+                      ),
+                      const Text(
+                        '吉他常插在第 2 路输入：默认自动跟随信号最强的一路，'
+                        '也可手动固定某一路。各路输入电平：',
+                      ),
+                      for (var i = 0; i < _inputChannelNames.length; i++)
+                        _meter(
+                          _inputChannelNames[i].isEmpty
+                              ? '通道 ${i + 1}'
+                              : '通道 ${i + 1} · ${_inputChannelNames[i]}',
+                          i < _inputChannelLevels.length
+                              ? _inputChannelLevels[i]
+                              : 0,
+                        ),
+                    ],
                     Text(
                       _status['audioOpen'] == false
                           ? '音频设备已关闭；重新开始后显示实际缓冲和延迟。'
@@ -877,4 +1130,96 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
       ),
     ],
   );
+
+  /// 扫描结果里的一行插件信息。
+  Widget _scannedPluginRow(ScannedPlugin plugin, {required bool canLoad}) {
+    final theme = Theme.of(context);
+    final loadable = canLoad && plugin.loadable && plugin.path.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  plugin.name.isEmpty ? '未命名插件' : plugin.name,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _formatBadge(plugin),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: loadable
+                    ? () => _send('load', {'path': plugin.path})
+                    : null,
+                child: const Text('加载'),
+              ),
+            ],
+          ),
+          if (plugin.subtitle.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                plugin.subtitle,
+                style: theme.textTheme.bodySmall,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          if (plugin.path.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                plugin.path,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          if (!plugin.loadable && plugin.note.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                plugin.note,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 格式徽标：VST2 / VST3。
+  Widget _formatBadge(ScannedPlugin plugin) {
+    final theme = Theme.of(context);
+    final color = plugin.isVst2
+        ? theme.colorScheme.tertiary
+        : theme.colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        plugin.formatLabel,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: color,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
 }

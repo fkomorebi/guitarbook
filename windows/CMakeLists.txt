@@ -65,14 +65,26 @@ include(flutter/generated_plugins.cmake)
 set(BUILD_BUNDLE_DIR "$<TARGET_FILE_DIR:${BINARY_NAME}>")
 # Make the "install" step default, as it's required to run.
 set(CMAKE_VS_INCLUDE_INSTALL_TO_DEFAULT_BUILD 1)
-if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-  set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
+# CMake expands generator expressions only in absolute install destinations. The
+# upstream template used the bundle directory as the install prefix, but the
+# JUCE subproject (see native/effects_host) installs its module headers with a
+# relative destination. A relative destination is joined with the prefix when
+# the install script runs, where the generator expression is still unexpanded,
+# so the install step died with 'file INSTALL cannot make directory ...
+# $<TARGET_FILE_DIR:guitarbook>/include/JUCE-8.0.12/modules ... Invalid
+# argument'. Keep the prefix a real directory and install the app payload into
+# the bundle directory explicitly. The JUCE headers are not shipped with the
+# app; they end up in this build-tree directory.
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT
+   OR CMAKE_INSTALL_PREFIX MATCHES "TARGET_FILE_DIR")
+  set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/install" CACHE PATH "..." FORCE)
 endif()
 
-set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
-set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
+set(INSTALL_BUNDLE_DIR "${BUILD_BUNDLE_DIR}")
+set(INSTALL_BUNDLE_DATA_DIR "${INSTALL_BUNDLE_DIR}/data")
+set(INSTALL_BUNDLE_LIB_DIR "${INSTALL_BUNDLE_DIR}")
 
-install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${INSTALL_BUNDLE_DIR}"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
@@ -108,5 +120,8 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 
 # Native realtime VST3 host, isolated from Flutter audio playback.
+# The host runs next to the app executable (the Dart backend looks for it in
+# the directory of the running executable), so pass the bundle directory on.
+set(GUITARBOOK_EFFECTS_HOST_BUNDLE_DIR "${BUILD_BUNDLE_DIR}")
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../native/effects_host" "effects_host")
 add_dependencies(${BINARY_NAME} guitarbook_effects_host)

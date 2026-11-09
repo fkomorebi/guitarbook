@@ -93,6 +93,9 @@ class EffectsBackend {
   /// 网页端不支持声卡与输入通道设置。
   bool get supportsDeviceSettings => false;
 
+  /// 网页端无法访问本机文件系统，因此不支持扫描 VST 插件。
+  bool get supportsPluginScan => false;
+
   bool get _isMobileBrowser {
     final agent = web.window.navigator.userAgent.toLowerCase();
     return agent.contains('android') ||
@@ -138,6 +141,8 @@ class EffectsBackend {
         throw UnsupportedError('网页端不支持声卡设置（输入设备由浏览器与系统决定）。');
       case 'load':
         throw UnsupportedError('网页端不支持 VST3 插件。');
+      case 'scan':
+        throw UnsupportedError('网页端不支持扫描 VST 插件。');
       case 'editor':
         throw UnsupportedError('网页端不支持插件参数窗口（请直接在踏板板上调节参数）。');
       case 'loopStart':

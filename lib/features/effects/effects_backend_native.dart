@@ -10,6 +10,9 @@ class EffectsBackend {
   bool get supported => mobile || Platform.isLinux || Platform.isWindows;
   bool get supportsVst3 => !mobile;
   bool get supportsDeviceSettings => !mobile;
+
+  /// 桌面端可以扫描已安装的 VST2 / VST3 插件；移动端走系统音频，不支持。
+  bool get supportsPluginScan => !mobile;
   EffectsMobileTransport? _mobileTransport;
   Process? _process;
   Future<void>? _launching;
@@ -85,6 +88,9 @@ class EffectsBackend {
   ]) async {
     if (_disposed) throw StateError('效果器已关闭。');
     if (mobile) {
+      if (command == 'scan') {
+        throw UnsupportedError('移动端不支持扫描 VST 插件。');
+      }
       return (_mobileTransport ??= EffectsMobileTransport()).send(
         command,
         arguments,
@@ -109,7 +115,12 @@ class EffectsBackend {
         jsonEncode({'id': id, 'command': command, ...arguments}),
       );
       return await completer.future.timeout(
-        Duration(seconds: command == 'load' ? 60 : 10),
+        Duration(seconds: switch (command) {
+          // 扫描要遍历多个插件目录，可能明显慢于普通命令。
+          'scan' => 120,
+          'load' => 60,
+          _ => 10,
+        }),
       );
     } on TimeoutException {
       // A hung plugin must not keep monitoring after the UI reports failure.

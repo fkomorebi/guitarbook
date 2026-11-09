@@ -8,11 +8,11 @@
 
 - **鼓机**：6 种拍号（4/4、3/4、2/4、5/4、6/8、7/8）、22 种风格预设，底鼓、军鼓、踩镲、拍手、嗵鼓五轨编辑，30–240 BPM、摇摆、分轨静音与独立音量。
 - **Looper**：最长 30 秒首层、最多 6 层叠录，支持撤销最近一层、删除任意一层（可撤销一次）、智能首层录音，以及键盘 / 模拟键盘的 USB 脚踏绑定。
-- **实时效果器**：Fuzz、压缩、混响、过载、延迟、哇音、移调与四种原创风格箱头，最多 8 节串联，可拖动排序、独立调参和旁通；Linux / Windows 可加载 VST3，还可用游戏手柄的线性扳机控制哇音位置（表情踏板）；电脑端浏览器提供同一批内置效果（本次变更实现，自动化整页实测通过；不支持 VST3 与湿声 Looper；2026-11-03 真实声卡环回实测本机网页端往返约 67–75 ms，页面侧有效项是 `latencyHint: 0`（省约 8 ms）、Chrome 启动参数 `--audio-buffer-size=128`（省约 21–27 ms，可到约 45 ms）与内置的低延迟插入式采集（`MediaStreamTrackProcessor`，再省约 4 ms，可到约 42 ms），再往下需改用桌面原生宿主），并新增用浏览器 Gamepad API 读取手柄线性扳机。
+- **实时效果器**：Fuzz、压缩、混响、过载、延迟、哇音、移调与四种原创风格箱头，最多 8 节串联，可拖动排序、独立调参和旁通；Linux / Windows 可加载 VST3，并可自动扫描本机已安装的 VST3 / VST2 插件后一键加载（VST2 默认只列出，需 Steinberg VST2 SDK 才能真正加载），还可用游戏手柄的线性扳机控制哇音位置（表情踏板）；电脑端浏览器提供同一批内置效果（本次变更实现，自动化整页实测通过；不支持 VST3、插件扫描与湿声 Looper；2026-11-03 真实声卡环回实测本机网页端往返约 67–75 ms，页面侧有效项是 `latencyHint: 0`（省约 8 ms）、Chrome 启动参数 `--audio-buffer-size=128`（省约 21–27 ms，可到约 45 ms）与内置的低延迟插入式采集（`MediaStreamTrackProcessor`，再省约 4 ms，可到约 42 ms），再往下需改用桌面原生宿主），并新增用浏览器 Gamepad API 读取手柄线性扳机。
 - **一起即兴**：从首页“即兴工作台”进入，同页操作鼓机、Looper 与效果器三件工具、分别调节音量；效果器位于工作台页面下方，进入后需在效果器区点击“开始监听”才会出声。Android / iOS / Linux / Windows 可将效果链处理后的声音录入 Looper（需先监听，实际采样率为 48 kHz）。
 - **智能base**：工作台内新增的自动低音。实时识别当前输入的和弦，按鼓机的 BPM、拍号与底鼓落点自动整出一条与鼓机等长同步的低音线；三种风格（跟底鼓 / 根音律动 / 走动低音）、独立音量，和弦变化落在下一拍，关闭时不占用麦克风。
 
-鼓机与 Looper 已接入六个平台；实时效果器支持范围为 Android / iOS / Linux / Windows 与电脑端浏览器（浏览器版为本次变更实现、自动化整页实测已通过，并已完成真实声卡环回延迟实测；macOS 暂不支持），其中哇音的表情踏板（游戏手柄线性扳机）在 Linux / Windows 桌面版与电脑端浏览器提供（Web 端为本次新增，基于浏览器 Gamepad API）。鼓机与 Looper 各自循环，**目前没有自动节拍同步、量化或时间拉伸**（智能base 与鼓机是按拍号逐样本对齐的，但 Looper 与鼓机之间仍不同步）。Looper 分层仅留在内存，离页清空；工作台新增整段循环录音，可保存混音 WAV，见下文。当前需从源码运行，构建通过与真机音频验证的区别见下方平台表。
+鼓机与 Looper 已接入六个平台；实时效果器支持范围为 Android / iOS / Linux / Windows 与电脑端浏览器（浏览器版为本次变更实现、自动化整页实测已通过，并已完成真实声卡环回延迟实测；macOS 暂不支持），桌面版（Linux / Windows）另新增插件扫描，可自动列出本机已安装的 VST3 / VST2 并在「外部插件」面板一键加载（网页端不支持插件扫描），其中哇音的表情踏板（游戏手柄线性扳机）在 Linux / Windows 桌面版与电脑端浏览器提供（Web 端为本次新增，基于浏览器 Gamepad API）。鼓机与 Looper 各自循环，**目前没有自动节拍同步、量化或时间拉伸**（智能base 与鼓机是按拍号逐样本对齐的，但 Looper 与鼓机之间仍不同步）。Looper 分层仅留在内存，离页清空；工作台新增整段循环录音，可保存混音 WAV，见下文。当前需从源码运行，构建通过与真机音频验证的区别见下方平台表。
 
 ## 欢迎 PR
 
@@ -34,6 +34,8 @@
 
 节拍器已改为音频引擎连续循环播放，按采样帧生成拍音；Linux Debug 与 Web 构建通过，实际音频延迟和各平台设备运行仍待验证。
 
+Windows 桌面构建于 2026-11-08 修好（根因两处：MSVC 未加 `/utf-8` 导致中文源码按 GBK 解码、CMake 安装前缀被写成生成器表达式），`flutter build windows --debug` 通过，`flutter run -d windows` 构建成功且应用成功启动，同日定位并修复了随后出现的 DevFS 临时目录报错（根因是构建产物带 Low 强制标签，应用以低完整性级别运行而无法写系统临时目录，与应用代码无关，修复见下文「DevFS 临时目录报错修复」），同日 Windows 原生效果器宿主启用 ASIO 后端（即兴工作台「声卡与输入通道」里可切换到本机已安装的 ASIO 驱动，延迟诊断卡片会列出可用后端与驱动名），切换后的实际往返延迟与听感仍待实测，详见下文「Windows 低延迟：ASIO 驱动」；同日修复了「设备测得到信号、实际监听却没有输入声音」：宿主原先固定只打开第 1 路输入（吉他常插第 2 路），现改为打开最多 4 路并逐路测量电平，默认自动跟随信号最强的一路，也可手动固定，详见下文「输入通道选择与自动跟随」；原生效果器宿主离线测试（`--test-builtins`）通过、JSON 协议往返正常。同日桌面宿主新增 `scan` 命令，可自动扫描本机已安装的 VST3 / VST2 插件，并列出名称、厂商、版本、分类、绝对路径、是否为虚拟乐器、能否加载与说明文字，在「外部插件」面板一键加载；VST2 默认只列出、不能真正加载（需 Steinberg VST2 SDK）。真实声卡输入 / 输出、监听与监听音量、实际延迟与听感、真实第三方 VST3 插件的听感与兼容性、手柄实机输入与真实设备上的调音 / 识别效果仍待验证，详见下文「Windows 构建排错」。下文带日期的历史记录段落保留各自当时的状态，最新状态以平台功能矩阵和各条“当前”说明为准。
+
 功能的当前设计和实现状态见 [最新功能设计](docs/FEATURES.md)。开发时需遵循 [项目开发约定](AGENTS.md)，随功能变化同步维护文档。
 
 ## 界面与配色（2026-10-28）
@@ -52,12 +54,12 @@
 | --- | --- | --- | --- |
 | Android | 内置实时效果器（即兴工作台内；七类单块 / 四种箱头、排序与旁通）、Looper 湿声录音（48 kHz 单声道）、首页、调音器、节拍器、鼓机/Looper（智能首层录音、独立音量）、即兴循环录音与 WAV 保存、智能base（和弦识别 + 自动低音）、音阶指板、和弦练习 | 自动/手动选弦；已接入麦克风；Android 7.0 / API 24 起，需录音权限 | Debug APK 构建及 x86_64 模拟器基础流程通过；真实声卡与听感待验证 |
 | iOS | 内置实时效果器（即兴工作台内；七类单块 / 四种箱头、排序与旁通）、Looper 湿声录音（48 kHz 单声道）、首页、调音器、节拍器、鼓机/Looper（智能首层录音、独立音量）、即兴循环录音与 WAV 保存、智能base（和弦识别 + 自动低音）、音阶指板、和弦练习 | 自动/手动选弦；已接入麦克风，需授权 | 待验证 |
-| Windows | 实时效果器（即兴工作台内；可拖动排序的拟物单块板、工作台接入与设备检测、七类单块 / 四种箱头 / VST3、手柄线性扳机控制哇音位置）、Looper 湿声录音（48 kHz 单声道）、首页、调音器、节拍器、鼓机/Looper（智能首层录音、独立音量）、即兴循环录音与 WAV 保存、智能base（和弦识别 + 自动低音）、音阶指板、和弦练习 | 自动/手动选弦；已接入麦克风，需系统允许应用访问 | 待验证 |
+| Windows | 实时效果器（即兴工作台内；可拖动排序的拟物单块板、工作台接入与设备检测、七类单块 / 四种箱头 / VST3、自动扫描已安装的 VST3 / VST2 插件、手柄线性扳机控制哇音位置）、Looper 湿声录音（48 kHz 单声道）、首页、调音器、节拍器、鼓机/Looper（智能首层录音、独立音量）、即兴循环录音与 WAV 保存、智能base（和弦识别 + 自动低音）、音阶指板、和弦练习 | 自动/手动选弦；已接入麦克风，需系统允许应用访问 | Debug 构建通过（`flutter build windows --debug`）、应用可启动，宿主离线测试（`--test-builtins`）通过；插件扫描命令已实现并在本机构建通过，可用本机已安装的 VST3 验证扫描结果；真实声卡输入 / 输出、监听与听感、手柄实机输入、真实第三方 VST3 插件的听感与兼容性待实机验证 |
 | macOS | 首页、调音器、节拍器、鼓机/Looper（智能首层录音、独立音量）、即兴循环录音与 WAV 保存、智能base（和弦识别 + 自动低音）、音阶指板、和弦练习 | 自动/手动选弦；已配置麦克风用途与音频输入权限，需授权 | 待验证 |
-| Linux | 实时效果器（即兴工作台内；可拖动排序的拟物单块板、工作台接入与设备检测、七类单块 / 四种箱头 / VST3、手柄线性扳机控制哇音位置）、Looper 湿声录音（48 kHz 单声道）、首页、调音器、节拍器、鼓机/Looper（智能首层录音、独立音量）、即兴循环录音与 WAV 保存、智能base（和弦识别 + 自动低音）、音阶指板、和弦练习 | 自动/手动选弦；已接入麦克风，需 parecord、pactl、ffmpeg；节拍器使用原生音频引擎 | 含低延迟宿主的 Debug 构建通过；声卡静音缓冲及音频图验证通过，2026-11-03 修正“没有收到输入数据”提示并实测本机默认输入为声卡回环时确实采不到吉他；真实演奏听感待验证；手柄输入在 profiler 开启下 CLI 级验证通过，GUI 端到端已验证（连接稳定、无每秒重连、无 fd 泄漏；真实扳机读数待实测） |
+| Linux | 实时效果器（即兴工作台内；可拖动排序的拟物单块板、工作台接入与设备检测、七类单块 / 四种箱头 / VST3、自动扫描已安装的 VST3 / VST2 插件、手柄线性扳机控制哇音位置）、Looper 湿声录音（48 kHz 单声道）、首页、调音器、节拍器、鼓机/Looper（智能首层录音、独立音量）、即兴循环录音与 WAV 保存、智能base（和弦识别 + 自动低音）、音阶指板、和弦练习 | 自动/手动选弦；已接入麦克风，需 parecord、pactl、ffmpeg；节拍器使用原生音频引擎 | 含低延迟宿主的 Debug 构建通过；声卡静音缓冲及音频图验证通过，2026-11-03 修正“没有收到输入数据”提示并实测本机默认输入为声卡回环时确实采不到吉他；真实演奏听感待验证；插件扫描命令与 Windows 共用桌面宿主实现，Linux 侧扫描结果未实测；手柄输入在 profiler 开启下 CLI 级验证通过，GUI 端到端已验证（连接稳定、无每秒重连、无 fd 泄漏；真实扳机读数待实测） |
 | Web | 电脑端浏览器版实时效果器（即兴工作台内；内置七类单块 / 四种箱头、排序与旁通；本次变更实现，自动化整页实测通过）、手柄线性扳机控制哇音位置（浏览器 Gamepad API，本次新增）、首页、调音器、节拍器、鼓机/Looper（智能首层录音、独立音量）、即兴循环录音与 WAV 保存、智能base（和弦识别 + 自动低音）、音阶指板、和弦练习 | 自动/手动选弦；已接入麦克风，需 HTTPS 或 localhost 及浏览器授权；节拍器使用 Web Audio；效果器还需在点击“开始监听”后由用户手势解锁音频；手柄需页面在前台且用户与页面有过交互 | Release 构建通过（效果器版后端已落盘），浏览器自动化实测通过；2026-11-03 真实声卡环回实测本机网页端往返约 67–75 ms；`latencyHint: 0` 省约 8 ms，Chrome `--audio-buffer-size=128` 再省约 21–27 ms，网页内置的低延迟插入式采集再省约 4 ms（合计约 42 ms）s（到约 45 ms），更低下需桌面原生宿主（有效听感待用户验证）；手柄扳机只有单元测试，未在真实手柄上实测 |
 
-节拍器共用界面和拍音生成逻辑，Android、iOS、Windows、macOS、Linux 使用 flutter_soloud，Web 使用原生 Web Audio。Linux Debug 与 Web Release 已构建，不能据此认定设备播放精度已验证。节拍器不需要麦克风权限；音频加载或输出失败时可关闭声音使用可视节拍。
+节拍器共用界面和拍音生成逻辑，Android、iOS、Windows、macOS、Linux 使用 flutter_soloud，Web 使用原生 Web Audio。Linux / Windows Debug 与 Web Release 已构建，不能据此认定设备播放精度已验证。节拍器不需要麦克风权限；音频加载或输出失败时可关闭声音使用可视节拍。
 
 ## 智能base（2026-11-05）
 
@@ -85,25 +87,27 @@
 - 低音是合成的正弦加谐波音色（根音范围 E1–A2），不是采样音色，也没有可换的音色库。
 - 识别与合成在手机上会占用一点运算开销。
 
-验证状态（2026-11-05）：静态分析通过，完整 Flutter 测试 263 项通过，`flutter build linux --debug` 与 `flutter build web --release` 构建通过。六个平台的真实吉他演奏听感（识别准确率、与鼓机的实际同步感）仍待验证。
+验证状态（2026-11-05）：静态分析通过，完整 Flutter 测试 263 项通过，`flutter build linux --debug` 与 `flutter build web --release` 构建通过；`flutter build windows --debug` 于 2026-11-08 通过。六个平台的真实吉他演奏听感（识别准确率、与鼓机的实际同步感）仍待验证。
 
 ## 实时效果器（Android / iOS / Linux / Windows / 电脑端浏览器，2026-11-01）
 
-效果器在即兴工作台页面内使用，首页不再提供独立入口；工作台上方是即兴录音面板，其下是鼓机与 Looper（宽屏并排、窄屏上下排列），最下方是效果器板。已接入 Android / iOS / Linux / Windows 的七类内置单块（含移调）和四种箱头模拟代码；Linux / Windows 另支持 VST3。移动端使用应用内原生音频引擎；macOS 暂不支持，页面显示平台限制。电脑端浏览器提供同一批内置效果（本次变更实现，自动化整页实测通过，真机听感待验证，见下文“电脑端浏览器版效果器”），不支持 VST3 与湿声 Looper。四个平台可在即兴工作台中配合鼓机、Looper 使用，Looper 默认录下效果器处理后的声音（湿声）。构建与设备验证状态分别记录，代码接入不代表已完成真机验证。
+效果器在即兴工作台页面内使用，首页不再提供独立入口；工作台上方是即兴录音面板，其下是鼓机与 Looper（宽屏并排、窄屏上下排列），最下方是效果器板。已接入 Android / iOS / Linux / Windows 的七类内置单块（含移调）和四种箱头模拟代码；Linux / Windows 另支持 VST3，并可自动扫描本机已安装的 VST3 / VST2 插件。移动端使用应用内原生音频引擎；macOS 暂不支持，页面显示平台限制。电脑端浏览器提供同一批内置效果（本次变更实现，自动化整页实测通过，真机听感待验证，见下文“电脑端浏览器版效果器”），不支持 VST3、插件扫描与湿声 Looper。四个平台可在即兴工作台中配合鼓机、Looper 使用，Looper 默认录下效果器处理后的声音（湿声）。构建与设备验证状态分别记录，代码接入不代表已完成真机验证。
 
 1. 吉他连接声卡的乐器输入，耳机接同一声卡；从首页进入“即兴工作台”后向下滚动到效果器区，点击“开始监听”才出声，空链输出干声。请先降低声卡耳机音量。进入工作台时只做引擎与音频设备检测，不会自动开始监听；检测失败时检查设备/权限后点击“重新检测”或“开始监听”重试。电脑端浏览器同样需在效果器区点击“开始监听”，由该次点击解锁音频并申请麦克风权限。
-2. 桌面需要更换设备时，先停止监听，点击“声卡与输入通道”，在独立设置窗口选择一个吉他输入通道、立体声输出、采样率及缓冲大小。Windows 使用本机可用的 WASAPI 等后端，本轮不包含 ASIO SDK；Linux 后端以设备设置实际列表为准。
-3. 直接点击“Fuzz 法兹 / 压缩 / 混响 / 过载 / 延迟 / 哇音 Wah / 移调”或四种箱头按钮添加内置效果，无需下载插件。Linux / Windows 也可输入适配当前系统和 CPU 架构的 `.vst3` 插件绝对路径，点击“加载插件”。Linux 示例：`/home/you/.vst3/MyEffect.vst3`；Windows 示例：`C:\Program Files\Common Files\VST3\MyEffect.vst3`。Linux 不能直接加载 Windows 插件。插件需自行安装，本项目不附带第三方音色；同一插件包有多个类型时加载第一个类型。
+2. 桌面需要更换设备时，先停止监听，点击“声卡与输入通道”，在独立设置窗口选择一个吉他输入通道、立体声输出、采样率及缓冲大小。Windows 可用 WASAPI 与 ASIO 等后端（ASIO 驱动由声卡厂商安装，应用不附带驱动）；Linux 后端以设备设置实际列表为准。声卡有多路输入时，在「声卡设置与延迟诊断」卡片里可看各路输入电平并选择监听哪一路（默认自动跟随信号最强的一路）。
+3. 直接点击“Fuzz 法兹 / 压缩 / 混响 / 过载 / 延迟 / 哇音 Wah / 移调”或四种箱头按钮添加内置效果，无需下载插件。Linux / Windows 也可输入适配当前系统和 CPU 架构的 `.vst3` 插件绝对路径，点击“加载插件”。Linux 示例：`/home/you/.vst3/MyEffect.vst3`；Windows 示例：`C:\Program Files\Common Files\VST3\MyEffect.vst3`。也可以在“外部插件”面板点击“扫描插件”，由宿主自动扫描本机已安装的插件，再点列表条目一键加载；手输绝对路径的方式仍然保留。Linux 不能直接加载 Windows 插件。插件需自行安装，本项目不附带第三方音色；同一插件包有多个类型时加载第一个类型。
 4. 页面顶部查看监听状态、输入/输出电平与削波提示；手动停止后可点击“开始监听”恢复。输出音量默认 50%，可在 0–100% 调节；关闭声卡直通监听可避免同时听到原始干声。
 5. 内置和 VST3 可混合串联，合计最多 8 节；同一种内置效果可重复添加，各自参数独立。效果器板按真实单块的右进左出连接：右侧吉他输入 → 编号 1…N → 左侧输出；侧面插孔、跳线和箭头展示实际串联关系。鼠标或触摸拖动单块顶部把手到目标单块位置排序（目标高亮，松开后插入，其他单块相对顺序保留）；窄屏拖至板边缘自动横向滚动，放到板外取消。也可点击前移/后移箭头排序、关闭图标移除；按金属脚踏开关切换旁通，旁通时状态灯熄灭，连接保留。监听时可自由添加、加载、移除、排序、旁通及转动参数旋钮，也可打开 VST3 参数窗口，无需反复停止/启动。结构切换可能短暂断音，旁通/移除会截断尾音。点击停止关闭音频设备；离页释放插件与引擎。最小化或进入隐藏/暂停状态停止监听，恢复后手动启动。
 6. Linux / Windows 桌面版与电脑端浏览器还可把游戏手柄的线性扳机当哇音表情踏板：先添加“哇音 Wah”，在效果器板下方“手柄线性扳机 → 哇音踏板”卡片启用，选择左/右扳机和目标哇音，再踩扳机扫频。默认关闭；哇音处于自动扫频、还没开始监听或没读到扳机读数时不会写入位置，卡片会提示原因。浏览器端通过 Gamepad API 读取（需要页面在前台且用户与页面有过交互），Linux / Windows 桌面端直接读取系统输入设备。
 
 
+插件扫描（桌面版 Linux / Windows）：宿主新增 `scan` 命令，扫描结果含名称、厂商、版本、分类、绝对路径、是否为虚拟乐器、能否加载与说明文字；「外部插件」面板点击“扫描插件”即可调用，并可直接点条目加载。Windows 默认扫描 VST3 目录 `%ProgramFiles%\Common Files\VST3`、`%ProgramFiles(x86)%\Common Files\VST3`、`%LOCALAPPDATA%\Programs\Common Files\VST3`；VST2 目录 `%ProgramFiles%\Common Files\VST2`、`%ProgramFiles(x86)%\Common Files\VST2`，以及 `Steinberg\VSTPlugins`、`VSTPlugins` 子目录，并读取 Steinberg ActivePlugins 注册表。Linux 扫描 `/usr/lib/vst3`、`/usr/local/lib/vst3`、`~/.vst3`、`/usr/lib/vst2`、`/usr/local/lib/vst2`、`~/.vst2` 等常见位置。扫描在宿主子进程中执行，损坏的插件不会拖垮宿主。VST3 可直接加载（沿用既有加载流程）。VST2 默认只列出、不能真正加载：JUCE 8 已移除 VST2 SDK，需要 Steinberg VST2 SDK 才能真正加载；构建时提供 CMake 选项 `GUITARBOOK_ENABLE_VST2` 与 `GUITARBOOK_VST2_SDK_DIR` 可启用真实加载，该路径在本机未验证。网页端不支持插件扫描。
+
 移动端使用方法：先将兼容的 USB 音频接口接入手机，耳机接同一接口，首次监听或工作台检测时允许录音权限。使用系统当前音频路由及系统单声道输入；没有外接接口时使用系统麦克风。请使用有线耳机避免扬声器反馈，蓝牙不作为低延迟验收输出。Android 使用 Oboe，iOS 使用 RemoteIO，Android 使用系统原生采样率，iOS 请求 48 kHz；两端均请求低缓冲。实际采样率、回调块长及 Android 输出队列大小以诊断为准。停止监听后可调整缓冲请求，系统可能采用不同值。实际采样率不是 48 kHz 时，Looper 明确拒绝湿声录音。
 
 Android / iOS 不提供外部 VST3、桌面声卡设置窗口或应用内路由选择；切换系统路由或插拔声卡后需手动重新开始。进入后台、来电/音频焦点中断会停止监听和未完成录音，回前台不会自动出声。拒绝权限后可在系统设置授权并重试。Android 暂不提供驱动往返延迟报告，两端暂不提供音频负载统计；不将缺失指标显示为实测零延迟。
 
-移动端首次原生构建需联网下载 JUCE 8.0.12，Android 使用该 JUCE 版本随附的 Oboe 1.9.0，并需要 Android NDK 与 CMake 3.22.1。iOS 在现有 Xcode 构建步骤中运行 `tool/prepare_ios_effects.sh`，将 JUCE 源码缓存到 `.dart_tool/guitarbook-native/JUCE-8.0.12`；可提前执行该脚本供离线构建。JUCE 沿用 AGPLv3 / 商业双许可；发布移动端同样需要遵循依赖许可。
+移动端首次原生构建需联网获取 JUCE 8.0.12，Android 使用该 JUCE 版本随附的 Oboe 1.9.0，并需要 Android NDK 与 CMake 3.22.1。JUCE 不再用 git 克隆，而是下载按标签 `8.0.12` 固定、SHA-256 校验（`dec1a8ba…cf102`）的源码包；桌面端与移动端使用同一份源码包和同一个校验值，各平台构建的是相同源码。iOS 在现有 Xcode 构建步骤中运行 `tool/prepare_ios_effects.sh`，把 JUCE 源码缓存到 `.dart_tool/guitarbook-native/JUCE-8.0.12`（与桌面端共用的共享缓存目录）；可提前执行该脚本供离线构建。JUCE 沿用 AGPLv3 / 商业双许可；发布移动端同样需要遵循依赖许可。
 
 
 | 内置效果 | 可调参数（默认值） |
@@ -126,7 +130,7 @@ Android / iOS 不提供外部 VST3、桌面声卡设置窗口或应用内路由�
 
 点击“移调”添加单块，上下拖动“移调”旋钮在 −12–12 半音之间升降音高（默认 0，即原音）；“干湿比”0 为全干、1 为全湿，0 半音时按直通处理；“输出”调整整体音量。算法用约 30 毫秒环形延迟线的双读头加交叉淡化把整段音色整体移调，不做时间拉伸，因此不会像变调器那样改变演奏速度，但湿声相对干声约有 30 毫秒延迟，听感上会带有轻微的延迟与金属味，实时演奏建议先小幅移调再与混响 / 延迟配合。Android / iOS / Linux / Windows 与电脑端浏览器提供同一套移调效果。半音在 −12 与 +12 之间快速来回拨动时，读头切换会打断交叉淡化，湿声可能出现台阶状跳变，属于算法固有特性。
 
-内置效果使用基础数字算法：哇音使用带参数平滑的共振带通滤波、Fuzz 硬削波、过载软饱和、立体声联动压缩、算法混响及反馈延迟；移调使用双读头环形延迟线加交叉淡化，把整段吉他音色整体升高或降低若干半音；箱头使用原创风格算法及可关闭的简易箱体滤波，不复刻特定硬件，不含 IR 卷积或过采样。界面中的输出与反馈以 0–1 数值显示。每块效果器使用彩色金属外壳、螺丝、刻度旋钮、状态灯与金属脚踏开关，以更紧凑的尺寸摆放在纯色深灰效果器板上。旋钮上下拖动调参，点击旋钮打开精细滑块；键盘 Tab 聚焦后用上下键微调、Enter 打开精细调节。窄屏可触摸或鼠标左右拖动，并使用滚动条浏览整块板；默认从输入与第一块开始。VST3 使用独立单块外观，通过“参数窗口”调整实际插件参数。“声卡设置与延迟诊断”和“外部 VST3 插件”默认折叠，展开后可查看详细信息或输入插件路径。可从“压缩 → 过载 → 箱头 → 延迟 → 混响”开始尝试，也可以自由改变顺序。旁通会跳过处理、切断尾音，不做无缝切换。
+内置效果使用基础数字算法：哇音使用带参数平滑的共振带通滤波、Fuzz 硬削波、过载软饱和、立体声联动压缩、算法混响及反馈延迟；移调使用双读头环形延迟线加交叉淡化，把整段吉他音色整体升高或降低若干半音；箱头使用原创风格算法及可关闭的简易箱体滤波，不复刻特定硬件，不含 IR 卷积或过采样。界面中的输出与反馈以 0–1 数值显示。每块效果器使用彩色金属外壳、螺丝、刻度旋钮、状态灯与金属脚踏开关，以更紧凑的尺寸摆放在纯色深灰效果器板上。旋钮上下拖动调参，点击旋钮打开精细滑块；键盘 Tab 聚焦后用上下键微调、Enter 打开精细调节。窄屏可触摸或鼠标左右拖动，并使用滚动条浏览整块板；默认从输入与第一块开始。VST3 使用独立单块外观，通过“参数窗口”调整实际插件参数。“声卡设置与延迟诊断”和“外部插件”默认折叠，展开后可查看详细信息、扫描已安装插件或输入插件路径。可从“压缩 → 过载 → 箱头 → 延迟 → 混响”开始尝试，也可以自由改变顺序。旁通会跳过处理、切断尾音，不做无缝切换。
 
 Linux 默认请求 **48 kHz / 128 帧**；页面可在停止监听时切换 64 / 128 / 256 / 512 帧，实际生效值、每块时长、驱动输入/输出延迟、插件延迟及欠载次数分别显示。先用 128 帧；需要更低延迟可试 64 帧，出现爆音或断续则提高到 256 / 512 帧。驱动打开失败时会尝试较大缓冲并显示回退；不支持的手动值会报错。调整不会清除效果链或改选输入通道。
 
@@ -136,11 +140,11 @@ Linux 桌面效果器按**系统默认输入**采集，应用内不自动猜选�
 
 本机延迟排查（2026-10-28）：Focusrite Scarlett Solo 4th Gen，PipeWire 在虚拟机中将最小 quantum 设为 1024。旧版默认 44.1 kHz / 512 帧，驱动报告输入输出合计约 69.7 ms；新版 48 kHz / 128 帧报告 16 ms，`pw-top` 确认活动图采用 128 帧，切到 256 帧后图也相应改变。以上是驱动报告和图调度验证，**不是物理回环实测往返延迟**；实际琴声听感、完整效果链的长期稳定性仍待验证。全湿延迟或混响本身也会推迟听到的声音，页面会提示；先旁通它们或降低干湿比，区分音色与监听延迟。
 
-第一版不扫描插件目录、不保存效果链/参数/设备设置，不支持 VST2、LV2、虚拟乐器或跨系统插件桥接。插件崩溃会结束独立宿主，主界面可重新连接，效果链需重新加载。插件加载超时会结束宿主。设备与插件报告的延迟并非实测往返延迟，实际手感取决于声卡、驱动、缓冲和插件；蓝牙不作为低延迟验收输出。
+桌面端已实现插件目录扫描（Windows / Linux），但第一版不保存效果链/参数/设备设置，不支持 LV2、跨系统插件桥接与 MIDI；VST2 只在扫描结果里列出、不能真正加载（需 Steinberg VST2 SDK，该加载路径本机未验证），虚拟乐器只在扫描结果中标注、不参与效果链。插件崩溃会结束独立宿主，主界面可重新连接，效果链需重新加载。插件加载超时会结束宿主。设备与插件报告的延迟并非实测往返延迟，实际手感取决于声卡、驱动、缓冲和插件；蓝牙不作为低延迟验收输出。
 
-桌面构建会同时编译 `guitarbook_effects_host` 并放到应用可执行文件旁，分发时保留整个构建目录。首次构建需联网下载 JUCE 8.0.12，要求 CMake 3.22+、C/C++17 工具链；Linux 还需 ALSA、X11、FreeType/Fontconfig 等开发依赖（Ubuntu 常见包：`libasound2-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`）。离线构建可先配置 `-DFETCHCONTENT_SOURCE_DIR_JUCE=/绝对路径/JUCE`，也可通过环境变量 `GUITARBOOK_EFFECTS_HOST` 指定已编译的引擎。JUCE 采用 AGPLv3 / 商业双许可，依赖许可见 [上游声明](https://github.com/juce-framework/JUCE/blob/8.0.12/LICENSE.md)。
+桌面构建会同时编译 `guitarbook_effects_host` 并放到应用可执行文件旁，分发时保留整个应用输出目录（Windows 下为 `build/windows/x64/runner/Debug`）。Windows 构建还会把 JUCE 模块头文件安装到 `build/windows/x64/install`（约 64 MB），该目录只服务于编译，不随应用分发，可安全删除。JUCE 依赖不再用 git 克隆：构建按固定标签 `8.0.12` 下载源码包 `https://codeload.github.com/juce-framework/JUCE/tar.gz/refs/tags/8.0.12`，并校验 SHA-256（`dec1a8ba…cf102`），因此不需要 git 网络访问。首次构建需联网，要求 CMake 3.22+、C/C++17 工具链；Linux 还需 ALSA、X11、FreeType/Fontconfig 等开发依赖（Ubuntu 常见包：`libasound2-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`）。依赖使用仓库内的共享缓存：源码包放在 `.dart_tool/guitarbook-native/downloads/`，解压后的源码放在 `.dart_tool/guitarbook-native/JUCE-8.0.12/`（与 iOS 辅助脚本 `tool/prepare_ios_effects.sh` 使用同一目录）；配置时若发现解压副本已存在，构建直接复用，不再联网，重复构建与离线构建都不需要下载。Android / iOS 使用的也是同一份源码包与同一个校验值，各平台构建的是相同源码。镜像或受限网络可在配置时改写下载地址（校验值不变，镜像必须提供同一份源码包）：`cmake -S native/effects_host -B build/effects-host -DGUITARBOOK_JUCE_URL=<镜像地址>`；Windows 上也可先运行 `pwsh -File tool/prepare_juce_sources.ps1` 填充缓存，见下文“Windows 构建排错”。缓存之外的本地源码仍可用 `-DFETCHCONTENT_SOURCE_DIR_JUCE=/绝对路径/JUCE` 指定，也可通过环境变量 `GUITARBOOK_EFFECTS_HOST` 指定已编译的引擎。VST2 默认只在扫描结果里列出：JUCE 8 已移除 VST2 SDK，真正加载需要 Steinberg VST2 SDK，可在配置时用 CMake 选项 `-DGUITARBOOK_ENABLE_VST2=ON` 与 `-DGUITARBOOK_VST2_SDK_DIR=<VST2 SDK 目录>` 启用；该路径在本机未验证。JUCE 采用 AGPLv3 / 商业双许可，依赖许可见 [上游声明](https://github.com/juce-framework/JUCE/blob/8.0.12/LICENSE.md)。
 
-若 Linux 构建报 `FETCHCONTENT_SOURCE_DIR_JUCE` 指向的目录不存在，说明构建缓存保留了失效的本地源码路径（例如已被清理的 `/tmp` 目录）。在项目根目录执行以下命令清除该覆盖，再重新运行；CMake 会将 JUCE 下载到构建目录的 `_deps/juce-src`，首次恢复需要联网。本地源码覆盖应使用长期保留的目录。
+若 Linux 构建报 `FETCHCONTENT_SOURCE_DIR_JUCE` 指向的目录不存在，说明构建缓存保留了失效的本地源码路径（例如已被清理的 `/tmp` 目录）。在项目根目录执行以下命令清除该覆盖，再重新运行；CMake 会把 JUCE 源码包下载到共享缓存 `.dart_tool/guitarbook-native/downloads/`，首次恢复需要联网。本地源码覆盖应使用长期保留的目录。
 
 ```bash
 cmake -S linux -B build/linux/x64/debug -U FETCHCONTENT_SOURCE_DIR_JUCE
@@ -149,7 +153,9 @@ flutter run -d linux
 
 如果随后提示 juceaide 的 source 与旧 `/tmp` 路径不匹配，将 `build/linux/x64/debug/_deps/juce-build/tools` 移出构建目录后重试，让它重新生成辅助工具缓存。本次恢复验证（2026-10-28）：已清除失效覆盖、重新下载 JUCE 并重建辅助工具缓存，Flutter 3.44.0 Linux Debug 构建通过；未重新验证界面运行与音频。
 
-本轮验证：静态分析通过，完整 Flutter 测试 73 项通过，覆盖重复添加、独立调参、排序/移除、监听中参数与旁通及小屏双倍字号参数阅读。原生测试覆盖三种采样率、参数极值、静音和有限输出、压缩比例、延迟时间/反馈、混响干湿与尾音、实例状态独立，以及排序后实际音频变化。Linux Debug 构建通过；打包后的混合链通信、参数独立、重排保留参数、八节上限与 VST3 回归通过；Web Release 构建回归通过（该平台不提供宿主）。Windows 未构建；两个平台的真实声卡听感、第三方插件兼容性与往返延迟均待验证。复现步骤见 [原生宿主说明](native/effects_host/README.md)。
+本轮验证：静态分析通过，完整 Flutter 测试 73 项通过，覆盖重复添加、独立调参、排序/移除、监听中参数与旁通及小屏双倍字号参数阅读。原生测试覆盖三种采样率、参数极值、静音和有限输出、压缩比例、延迟时间/反馈、混响干湿与尾音、实例状态独立，以及排序后实际音频变化。Linux Debug 构建通过；打包后的混合链通信、参数独立、重排保留参数、八节上限与 VST3 回归通过；Web Release 构建回归通过（该平台不提供宿主）。Windows Debug 构建通过（2026-11-08），宿主离线测试（`--test-builtins`）通过；同日桌面宿主新增插件扫描命令，已在本机构建通过，并可用本机已安装的 VST3 验证扫描结果（名称、厂商、版本、分类、绝对路径、是否虚拟乐器、能否加载、说明文字），VST2 仍只列出、不真正加载；真实声卡听感、真实第三方 VST3 插件的听感与兼容性、往返延迟仍待验证。复现步骤见 [原生宿主说明](native/effects_host/README.md)。
+
+以下带日期的各条记录按当日状态书写，其中的“Windows 未构建 / 未重新构建”指当时的构建情况；Windows 的最新构建与验证状态见「Windows 构建排错」。
 
 本次自动监听与界面优化验证（2026-10-28）：静态分析及完整 74 项 Flutter 测试通过，Linux Debug 构建通过；打包宿主在监听启用状态下的内置链编辑和 VST3 离线测试通过。已检查桌面明暗预览；真实声卡切换听感仍待验证，Windows 未重新构建。
 
@@ -185,7 +191,7 @@ flutter run -d linux
 
 - 延迟由浏览器与系统音频栈决定，页面能调的只有 AudioContext 的 `latencyHint`。2026-11-03 在本机（Focusrite Scarlett Solo 4th Gen + PipeWire 1.6.2，quantum 1024）用硬件 Loopback 实测「播放 → 采集」往返：默认参数约 67–75 ms，浏览器只报输出侧 baseLatency 2.7 ms 与采集 21.3 ms，`outputLatency` 在 Linux Chrome 恒为 0。把 `latencyHint` 改为数字 0 后省约 8 ms；用 Chrome 启动参数 `--audio-buffer-size=128` 再省约 21–27 ms（往返约 45 ms，仓库脚本 `tool/web_low_latency.sh`）；网页端内置的低延迟插入式采集（`MediaStreamTrackProcessor`，浏览器不支持时自动回退）再省约 4 ms，与旗标叠加后本机约 42 ms。调小 PipeWire quantum（`pw-metadata -n settings 0 clock.quantum 128`）在本机 Chrome 环回上没有稳定收益（Chrome 采集走 ALSA 硬件环回，不经 PipeWire），只对走 Pulse 的桌面端链路可能有效。剩余延迟在 Pulse/ALSA 播放路径与 USB / 硬件上，网页无法再压缩；要进到 20 ms 以内只能改用桌面原生宿主 `guitarbook_effects_host`（64/128 帧块直接读写声卡）。蓝牙耳机不作低延迟验收环境。
 - 输出只能走系统默认音频设备，无法在页面内切换输出设备；也无法选择声卡输入通道，输入由浏览器与系统决定；缓冲大小同样由浏览器决定，没有声卡设置窗口。
-- 不支持 VST3：网页端没有插件加载与参数窗口，也没有声卡设置窗口。
+- 不支持 VST3：网页端没有插件加载、插件扫描与参数窗口，也没有声卡设置窗口。
 - 不支持湿声 Looper：网页端的 Looper 录的是干声（原始输入），不是效果链处理后的声音。
 - 页面刷新或崩溃会丢失整条效果链（网页端无法像原生那样重新连接宿主进程）。
 - 网页端混响是 Freeverb 结构等效实现，与原生 JUCE Reverb 音色不完全一致（未做逐样本对齐）。
@@ -201,7 +207,7 @@ Linux / Windows 桌面版与电脑端浏览器可以把游戏手柄的线性扳�
 三个平台的读取方式不同：
 
 - **Linux 桌面版**直接读取 `/dev/input/event*`：从 `/proc/bus/input/devices` 查找带线性扳机轴的手柄，支持热插拔重连，并尝试读取驱动实际量程（常见 0–255 或 0–1023）。多数桌面发行版会为已登录用户自动授权；若提示没有权限，可把当前用户加入 `input` 组（`sudo usermod -aG input $USER`，重新登录），或为手柄安装 udev 规则：新建 `/etc/udev/rules.d/99-gamepad.rules`，写入 `KERNEL=="event*", SUBSYSTEM=="input", MODE="0660", TAG+="uaccess"`，再执行 `sudo udevadm control --reload-rules && sudo udevadm trigger`。Flatpak / Snap 沙箱可能屏蔽 `/dev/input`。**如果 `event*` 因为权限打不开，会自动退回旧版 joystick 接口**（`/dev/input/js*`，默认 `0664`，任何用户都能读，不需要 `input` 组）：内核会把轴值缩放到 -32767..32767（0 为中点），这里按比例换算回 0–255 再驱动哇音；能用 evdev 时仍优先用 evdev，因为只有它知道驱动真实量程。 Linux 读取层在独立 isolate 里用非阻塞 `open` + `poll` 轮询：`poll` 被信号打断（`EINTR`）时按剩余时间重试，`read` 只有读到 EOF 才当作断开，`EAGAIN` 或空读继续轮询。
-- **Windows 桌面版**通过 XInput 读取左/右扳机（0–255），仅识别 XInput 兼容手柄（Xbox 系列）；PlayStation 手柄需先经 Steam Input 或 DS4Windows 映射。
+- **Windows 桌面版**通过 XInput 读取左/右扳机（0–255），仅识别 XInput 兼容手柄（Xbox 系列）；PlayStation 手柄需先经 Steam Input 或 DS4Windows 映射。该输入层在 Windows 上尚未构建、未运行。
 - **电脑端浏览器**通过浏览器 Gamepad API 读取标准映射里的第 6（L2）/ 第 7（R2）号按钮的模拟量（浏览器归一化到 0–1，这里换算成 0–255）。浏览器通常要先按一次手柄上的任意按键，才会把设备交给网页；页面必须在前台，切到后台时浏览器会暂停读取。找不到手柄时卡片会直接给出这三步排查提示：按一次手柄按键 → 保持网页在前台 → 在 Linux 上让浏览器能读 `/dev/input/event*`（`input` 组或 udev uaccess 规则；Chrome 官方规则缺失时浏览器同样看不到手柄）。没有标准映射的手柄（扳机是数字按键）会明确点名提示。
 
 **先确认读取权限，但本次故障不是权限问题（2026-11-03 实测）**：`event*` 节点默认是 `0660 root:input`，用户不在 `input` 组时通常读不到；但 systemd 的 70-uaccess 规则会给 seat0 登录用户打上 uaccess 标签，xpad 这类手柄的 `event*` 节点又带 `ID_INPUT_JOYSTICK`，所以多数桌面会话本来就有读权限。本机实测当前用户可通过 ACL 读取 `/dev/input/event20`（`getfacl /dev/input/event20` 可确认），设备在线、打开正常；此前把阻塞归因于权限的结论已作废。网页端同样由浏览器进程自己读 `/dev/input`（Chrome 未装官方 `60-chrome-devices.rules` 时枚举不到手柄；Firefox 的 snap 版默认已连接 joystick 接口）。如果 `getfacl` 里确实没有当前用户，再按下面方式授权：uaccess 规则不用重新登录，加入 `input` 组需要重新登录。Flatpak / Snap 沙箱也可能屏蔽 `/dev/input`：
@@ -297,7 +303,7 @@ flutter test
 - `tool/check_web_effects_dsp.mjs`、`tool/web_effects_dsp_check.html`：电脑端浏览器版效果器 DSP 的真实浏览器回归（无头 Chrome + OfflineAudioContext + 真 AudioWorkletNode）。
 - `tool/check_web_effects_page.mjs`：电脑端浏览器版效果器的整页回归（需先 `flutter build web --release`，再用无头 Chrome 打开真实产物做整页交互）。
 - `lib/features/expression_pedal/`：游戏手柄线性扳机输入层（Linux evdev / Windows XInput）与哇音表情踏板控制。
-- `native/effects_host/`：共享内置算法与 Linux / Windows VST3 宿主。
+- `native/effects_host/`：共享内置算法、Linux / Windows VST3 宿主与插件扫描命令。
 - `native/mobile_effects/`：移动端应用内效果链、Oboe 后端与离线验证。
 - `ios/Runner/Effects/`：iOS RemoteIO 后端与控制通道。
 - `test/`：音高检测与首页、调音器交互组件测试。
@@ -326,6 +332,128 @@ flutter build linux --debug
 ```
 
 如果提示缺少 C++ 标准库，请安装完整的 `g++` 开发工具链。如果提示 `cannot open display`，请在已登录的图形桌面终端运行。此次验证使用临时可写 Flutter SDK 和本机已有引擎缓存，Debug 构建通过；执行环境无法连接显示服务，窗口启动和实际录音仍待验证。其他平台的验证状态不变。
+
+## Windows 构建排错（2026-11-07 / 2026-11-08）
+
+### 依赖获取仍走 git 克隆（2026-11-07）
+
+Windows 桌面构建若出现下列报错，说明依赖获取仍走了旧的 git 克隆方式：
+
+```
+CUSTOMBUILD : error : RPC failed; curl 52 Empty reply from server
+Failed to connect to github.com:443
+Failed to clone repository: 'https://github.com/juce-framework/JUCE.git'
+```
+
+原因是 git 不使用 Windows 系统代理：浏览器能通过本机代理访问 GitHub，git 与 CMake 的直连则会超时。当前 JUCE 依赖改为下载按标签 `8.0.12` 固定、SHA-256 校验（`dec1a8ba…cf102`）的源码包，不需要 git 网络访问；可选两种处理方式。
+
+方式一：在项目根目录运行一次辅助脚本，它按系统代理（或 `https_proxy` / `HTTPS_PROXY` 环境变量）下载源码包、校验 SHA-256，再解压到共享缓存 `.dart_tool/guitarbook-native/JUCE-8.0.12`；之后构建直接复用缓存，不再联网。脚本可重复执行，已缓存时不做重复下载。
+
+```powershell
+pwsh -File tool/prepare_juce_sources.ps1
+pwsh -File tool/prepare_juce_sources.ps1 -Proxy http://127.0.0.1:10808
+```
+
+方式二：在配置时指定镜像地址（校验值不变，镜像必须提供同一份源码包）。
+
+```bash
+cmake -S native/effects_host -B build/effects-host -DGUITARBOOK_JUCE_URL=<镜像地址>
+```
+
+旧声明留下的 `build/windows/x64/_deps/juce-subbuild` 仍会尝试 git 克隆，重新配置前先删除构建目录下的 `_deps`，再重新构建。
+
+```powershell
+Remove-Item -Recurse -Force build/windows/x64/_deps
+flutter build windows
+```
+
+以上两种方式只处理依赖获取，本身不代表构建结果；本节末尾记录了 2026-11-08 的构建与运行验证状态。
+
+### Debug 构建失败修复（2026-11-08）
+
+2026-11-08 修复了 Windows 上 `flutter run -d windows` 的构建失败，根因两处。
+
+一是 MSVC 源码编码：源文件是 UTF-8 无 BOM，MSVC 未加 `/utf-8` 时按系统代码页 936（GBK）解码，GBK 双字节吞掉字符串结尾引号，报 `error C2001: 字符串字面量中的换行符`，集中在 `native/effects_host/builtin_effect.h`、`native/effects_host/builtin_effect_tests.h`、`native/effects_host/main.cpp`。修复方式是在 `native/effects_host/CMakeLists.txt` 与 `native/mobile_effects/CMakeLists.txt` 的 `project()` 之后加 `if(MSVC) add_compile_options(/utf-8) endif()`。这同时修正了运行时编码：`juce::String::fromUTF8` 与 UTF-8 stdout 协议现在输出中文正常。
+
+二是 CMake 安装阶段：Flutter 模板把 `CMAKE_INSTALL_PREFIX` 设成生成器表达式 `$<TARGET_FILE_DIR:guitarbook>`，而 JUCE 用**相对** DESTINATION 安装模块头文件，运行时与未展开的 prefix 拼接，报 `file INSTALL cannot make directory ".../$<TARGET_FILE_DIR:guitarbook>/include/JUCE-8.0.12/modules ... Invalid argument`，最终 `error MSB3073` 与 `Error: Build process failed.`。修复方式是把 `windows/CMakeLists.txt` 的 `CMAKE_INSTALL_PREFIX` 改成真实绝对路径 `${CMAKE_CURRENT_BINARY_DIR}/install`，应用自身的安装目标改用 `${BUILD_BUNDLE_DIR}` 这个 genex 绝对路径，`native/effects_host/CMakeLists.txt` 的宿主安装规则也改用绝对 genex 目录。
+
+若旧构建目录里已缓存了带生成器表达式的前缀，重新配置即可修正；也可以直接删掉构建目录重来：
+
+```powershell
+cmake -S windows -B build/windows/x64
+flutter build windows --debug
+```
+
+`build/windows/x64/install` 目录只存放安装出来的 JUCE 头文件（约 64 MB），不随应用分发，可安全删除，重新构建时会再生成。
+
+本轮验证（Windows，2026-11-08）：`flutter build windows --debug` 成功（`√ Built build\windows\x64\runner\Debug\guitarbook.exe`，首次约 19 秒，增量约 8 秒）；`flutter run -d windows --debug lib\main.dart` 构建成功且应用成功启动（日志 `Using the Impeller rendering backend (OpenGLESSDF)`），随后曾出现 DevFS 临时目录错误（`_createDevFS: PathAccessException: Creation of temporary directory failed, path = 'C:\Users\Administrator\AppData\Local\Temp'`），2026-11-08 已定位并修复（根因是构建产物被打了 Low 强制标签，与应用代码无关），修复后同一条命令可完整走通：`√ Built build\windows\x64\runner\Debug\guitarbook.exe` → `Using the Impeller rendering backend (OpenGLESSDF)` → `Syncing files to device Windows... 69ms` → `A Dart VM Service on Windows is available at: http://127.0.0.1:56071/mdI6FVvi8Z4=/`，不再报错；修复命令见下文「DevFS 临时目录报错修复」。产物目录 `build/windows/x64/runner/Debug/` 含 `guitarbook.exe`、`guitarbook_effects_host.exe`、`flutter_windows.dll`、`flutter_soloud_plugin.dll`、`record_windows_plugin.dll`、FLAC / ogg / opus / vorbis 解码 dll，以及 `data/licenses/JUCE-LICENSE.md` 与 `data/licenses/VST3-SDK-LICENSE.txt`。
+
+原生效果器宿主在 Windows 首次验证通过：`guitarbook_effects_host.exe --test-builtins` 输出 `Built-in DSP tests passed`、`Wet Looper capture tests passed`、`Editable built-in chain audio tests passed`（exit=0）；JSON 协议往返正常（stdin 送 `{"id":1,"command":"builtin","kind":"fuzz"}` 等，stdout 返回正确中文如 "Fuzz 法兹"、"现代高增益箱头"）。
+
+仍未验证：真实声卡输入 / 输出、监听与监听音量、实际延迟与听感；Windows 上真实第三方 VST3 插件的加载与听感（插件扫描命令已实现并在本机构建通过，可用本机已安装的 VST3 验证；离线测试仍只覆盖内置效果）；启用 Steinberg VST2 SDK 后的 VST2 加载路径；手柄（gamepad）输入层在 Windows 上未构建、未运行；真实设备上的调音 / 识别效果。
+
+### DevFS 临时目录报错修复（2026-11-08）
+
+现象：构建成功后运行 `flutter run -d windows --debug`，应用本身能起来（`Using the Impeller rendering backend (OpenGLESSDF)`），但 flutter 工具随后报错并退出：
+
+```
+Finished with error: _createDevFS: (-32603) Internal error
+_createDevFS: Unexpected exception:PathAccessException: Creation of temporary directory failed, path = 'C:\Users\<用户名>\AppData\Local\Temp' (OS Error: 拒绝访问。, errno = 5)
+App failed to start
+```
+
+根因：不是应用代码问题，也不是系统临时目录的 ACL 拒绝访问，而是**构建产物带了 `Mandatory Label\Low Mandatory Level`（低完整性）强制标签**，应用因此以低完整性级别运行；Windows 不允许低完整性进程写入中完整性目录，于是应用进程内的 Dart VM service（`createTempDirCallback` → `Directory.systemTemp.createTemp`）在系统临时目录下创建 DevFS 目录时被拒（errno 5），flutter 工具随之退出。低完整性标签常见于在受限沙箱 / 自动化环境里构建的产物。
+
+判断方法（任选其一）：`icacls build\windows\x64\runner\Debug\guitarbook.exe` 看输出里的 `Mandatory Label` 行；`icacls build\windows\x64\runner\Debug\guitarbook.exe | findstr /i "Mandatory"`；系统临时目录本身既没有强制标签也没有 deny ACE 时，问题基本就落在产物标签上。
+
+修复：把构建产物与仓库目录的强制标签提升到中完整性后重新构建。
+
+```powershell
+icacls "build\windows\x64\runner\Debug" /setintegritylevel "(OI)(CI)M" /T
+icacls . /setintegritylevel "(OI)(CI)M"
+```
+
+`/T` 递归作用于子文件与子目录，`(OI)(CI)` 让之后新建的文件继承该标签；第二条对仓库根生效后，`lib`、`build` 以及后续新生成的产物都会继承中完整性标签，重新构建即可。若只想临时绕过而不改标签，可把 `TEMP` / `TMP` 指到同级别目录（例如仓库内的 `build\tmp`），但产物仍以低完整性运行，属于绕过而非修复。
+
+验证（2026-11-08，修复后，系统 `%TEMP%` 未做任何重定向）：`flutter build windows --debug` 成功；`flutter run -d windows --debug` 依次输出 `√ Built build\windows\x64\runner\Debug\guitarbook.exe`、`Using the Impeller rendering backend (OpenGLESSDF)`、`Syncing files to device Windows... 69ms`、`A Dart VM Service on Windows is available at: http://127.0.0.1:56071/mdI6FVvi8Z4=/`，**不再出现 `_createDevFS` 报错**；重建后的 `guitarbook.exe` 标签为 `Mandatory Label\Medium Mandatory Level`。对照验证：把同一份产物复制到无标签目录后直接启动，`_createDevFS` 立即成功并在系统临时目录下建出 `guitarbook<随机>` 目录，可确认因果。
+
+### Windows 低延迟：ASIO 驱动（2026-11-08）
+
+现象：即兴工作台 → 实时效果器 →「声卡与输入通道」里，设备类型只有「Windows Audio」「Windows Audio (Exclusive Mode)」「Windows Audio (Low Latency Mode)」和「DirectSound」，没有 ASIO，只能走系统混音路径，延迟明显偏高。
+
+根因：原生效果器宿主没有定义 `JUCE_ASIO`，JUCE 不会编译 ASIO 后端（`ASIOAudioIODeviceType`），设备类型下拉里自然没有 ASIO。旧代码里「ASIO needs a separately supplied SDK; use WASAPI without that dependency.」的注释已经过时：JUCE 8 自带 Steinberg ASIO SDK 的接口头文件（`modules/juce_audio_devices/native/asio/`），`JUCE_ASIO=1` 配默认的 `JUCE_ASIO_USE_EXTERNAL_SDK=0` 就能编译，不需要另行下载 SDK。
+
+修复：`native/effects_host/CMakeLists.txt` 在 Windows 分支启用 ASIO 后端。
+
+```cmake
+if(WIN32)
+  target_compile_definitions(guitarbook_effects_host PRIVATE JUCE_ASIO=1)
+endif()
+```
+
+配合改动：宿主 `status` 上报新增 `deviceTypes`（可用后端）与 `asioDrivers`（本机枚举到的 ASIO 驱动名）；效果器页的「声卡设置与延迟诊断」卡片会显示「可用后端」「ASIO 驱动」两行并给出切换步骤；若已启用 ASIO 后端但系统里没装任何 ASIO 驱动，则提示先安装声卡厂商的驱动。ASIO 驱动由声卡厂商提供，本应用不附带驱动。
+
+用法：在工作台点「声卡与输入通道」→ 设备类型选 ASIO → 选驱动（如 `Focusrite USB ASIO`）→ 采样率与缓冲在驱动自带控制面板里设好 → 回到工作台把缓冲选成 64 或 128 帧。
+
+许可：JUCE 的 ASIO 后端编译的是 Steinberg ASIO SDK 接口头文件，其许可文件随应用一起安装在 `data/licenses/ASIO-SDK-LICENSE.txt`；对外分发前需按该许可条款自行确认合规（例如商业分发需要 Steinberg 的书面许可）。
+
+验证（2026-11-08，Windows Debug 构建）：`flutter build windows --debug` 成功；宿主 `status` 返回 `"deviceTypes": ["Windows Audio", "Windows Audio (Exclusive Mode)", "Windows Audio (Low Latency Mode)", "DirectSound", "ASIO"]`、`"asioDrivers": ["Focusrite Thunderbolt ASIO", "Focusrite USB ASIO"]`；`flutter run -d windows --debug` 构建并正常启动；产物目录 `data/licenses/` 下新增 `ASIO-SDK-LICENSE.txt`。
+
+仍待验证：切换到 ASIO 后的实际往返延迟、监听与听感（需真实声卡与监听设备实测）；ASIO 独占模式下的输入 / 输出组合，以及 ASIO 下真实第三方 VST3 插件的加载与听感。
+
+### 输入通道选择与自动跟随（2026-11-08）
+
+现象：声卡在「声卡与输入通道」里能测到信号（用户反馈「test 的时候是有声音」），但点「开始监听」后却没有任何输入声音，Windows 上 ASIO 与 WASAPI 都会出现。
+
+根因：原生效果器宿主一直按「1 路输入」打开设备（`devices.initialise(1, 2, nullptr, true)`，等价于 JUCE 的 `useDefaultInputChannels = true`），并在音频回调里固定取**第一路**输入当单声道源。吉他和吉他箱通常插在声卡的**第 2 路**输入（Scarlett 的 Inst 1），于是被监听的通道是数字静音：设备能打开、测得到信号，但监听路径收到的全是 0。JUCE 的设备选择窗口在更换设备或切换类型时同样会把通道数退回 1 路，所以换成 ASIO 之后问题依旧。
+
+修复：宿主改为按需打开**最多 4 路**输入（`useDefaultInputChannels = false` + 显式通道掩码；驱动不接受该宽度时回退到它接受的宽度并恢复原配置），在音频回调里逐路测量峰值，默认自动跟随信号最强的一路（当前通道强 1.5 倍时保持不变，避免演奏间隙跳路），也可以在页面上手动固定某一路。
+
+配合改动：宿主 `status` 新增 `inputChannelNames`（已打开的输入通道名）、`inputChannelLevels`（各路瞬时电平）、`activeInputChannel`（当前监听的路）、`autoInputChannel`（是否自动跟随）；新增 `inputChannel` 命令（`{"auto": true}` 自动跟随 / `{"index": i}` 固定第 i 路）。效果器页「声卡设置与延迟诊断」卡片在多路输入时显示通道选择（自动 / 通道 N）与各路电平表；「没有收到任何输入数据」提示补充说明「也可能是吉他插在第 2 路」。
+
+验证（2026-11-08，Windows Debug 构建）：`flutter build windows --debug` 成功；宿主在本机 Focusrite USB 上 `status` 返回 `"inputChannels": 2`、`"inputChannelNames": ["Input channel 1", "Input channel 2"]`、`"inputChannelLevels": [0.0, 0.0]`、`"autoInputChannel": true`（修复前只会打开 1 路），输入端点为「Analogue 1 + 2 (Focusrite USB Audio)」；`flutter run -d windows --debug` 构建并正常启动；`dart analyze lib` 无问题。
+
+仍待验证：插上吉他后各路电平的实测数值与自动跟随实际选中的通道，以及 ASIO 与 WASAPI 的输入通道映射是否一致（ASIO 的位掩码第 i 位对应第 i 路 ASIO 输入，不做立体声配对扩展）。
 
 ## 调音反馈改进（2026-10-27）
 
@@ -414,7 +542,7 @@ Android / iOS / Linux / Windows 需先开始效果器监听，实际采样率为
 
 首页进入“即兴工作台”，鼓机、Looper 和效果器放在同一页，无需切换面板。宽屏上方并排显示 Looper 和鼓机，下方为效果器；窄屏纵向排列，可滚动访问。鼓机音量 0–100%（默认 100%）、Looper 回放音量 0–400%（默认 100%）、效果器输出音量 0–100%（默认 50%）分别控制各自声音。鼓机音量可在播放中实时调节，不重启节奏；停止或切换预设保留音量，离页重置。
 
-Android / iOS / Linux / Windows 进入工作台后会静音检测效果器引擎和声卡输入/立体声输出，检测后释放设备；点击“开始监听”才出声（按钮在页面下方的效果器区，需向下滚动）。可重新检测，失败显示原因；macOS 显示效果器不支持，鼓机与 Looper 仍可使用；电脑端浏览器本轮提供内置效果器（本次变更实现，自动化整页实测通过），但不支持 VST3 与湿声 Looper，工作台的 Looper 仍录原始输入。检测通过表示当时能打开设备，不能判断吉他是否已连接或保证演奏延迟；监听中若连续 3 秒收不到任何数据（精确数字静音），会提示输入设备可能不是吉他所在接口，并给出「重新连接设备」「声卡与输入通道」两个动作。Android / iOS / Linux / Windows 的 Looper 共用效果器输入，录制效果链后的声音；需先开始监听，声卡采样率设为 48000 Hz，不会自动回退为干声。其他平台继续录原始输入。离开工作台释放全部会话。鼓机与 Looper 独立循环，目前不自动量化到小节、锁定速度或拉伸录音。
+Android / iOS / Linux / Windows 进入工作台后会静音检测效果器引擎和声卡输入/立体声输出，检测后释放设备；点击“开始监听”才出声（按钮在页面下方的效果器区，需向下滚动）。可重新检测，失败显示原因；macOS 显示效果器不支持，鼓机与 Looper 仍可使用；电脑端浏览器本轮提供内置效果器（本次变更实现，自动化整页实测通过），但不支持 VST3、插件扫描与湿声 Looper，工作台的 Looper 仍录原始输入。检测通过表示当时能打开设备，不能判断吉他是否已连接或保证演奏延迟；监听中若连续 3 秒收不到任何数据（精确数字静音），会提示输入设备可能不是吉他所在接口，并给出「重新连接设备」「声卡与输入通道」两个动作。Android / iOS / Linux / Windows 的 Looper 共用效果器输入，录制效果链后的声音；需先开始监听，声卡采样率设为 48000 Hz，不会自动回退为干声。其他平台继续录原始输入。离开工作台释放全部会话。鼓机与 Looper 独立循环，目前不自动量化到小节、锁定速度或拉伸录音。
 
 1. Android / iOS / Linux / Windows 先在下方效果器开始监听，实际采样率需为 48000 Hz，调整好音色（桌面可选择输入通道，移动端使用系统当前路由提供的单声道输入）；再点击“录制第一层”或按空格。其他平台首次允许麦克风权限后开始演奏。
 2. 再踩一次结束首层并循环播放；首层至少 0.3 秒、最长 30 秒，达到上限自动结束。

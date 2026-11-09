@@ -159,6 +159,39 @@ class FakeEffects extends EffectsBackend {
       plugins[arguments['index'] as int]['bypass'] = arguments['value'];
     }
     if (command == 'remove') plugins.removeAt(arguments['index'] as int);
+    if (command == 'scan') {
+      return {
+        'platform': 'windows',
+        'vst2Supported': false,
+        'directories': const ['C:/Program Files/Common Files/VST3'],
+        'plugins': const [
+          {
+            'format': 'vst3',
+            'name': 'Test Reverb',
+            'vendor': 'Test Audio',
+            'version': '1.2.3',
+            'category': 'Fx',
+            'path': 'C:/Plugins/Test Reverb.vst3',
+            'isInstrument': false,
+            'loadable': true,
+            'note': '',
+          },
+          {
+            'format': 'vst2',
+            'name': 'Legacy Synth',
+            'vendor': 'Old Labs',
+            'version': '0.9',
+            'category': 'Synth',
+            'path': 'C:/Plugins/Legacy Synth.dll',
+            'isInstrument': true,
+            'loadable': false,
+            'note': '当前构建未启用 VST2 加载（需要 Steinberg VST2 SDK）',
+          },
+        ],
+        'errors': const ['D:/Plugins 不可读'],
+        'durationMs': 42,
+      };
+    }
     return {
       'available': command == 'probe',
       'running': running,
@@ -336,7 +369,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(backend.calls.first, 'start');
       expect(find.text('声卡与输入通道'), findsNothing);
-      expect(find.text('外部 VST3 插件'), findsNothing);
+      expect(find.text('外部插件（VST2 / VST3）'), findsNothing);
       await tester.scrollUntilVisible(find.text('美式清音箱头'), 200);
       await tester.ensureVisible(find.text('美式清音箱头'));
       await tester.pumpAndSettle();
@@ -432,7 +465,7 @@ void main() {
     await tester.pump();
     expect(backend.running, isTrue);
     await tester.scrollUntilVisible(
-      find.text('外部 VST3 插件'),
+      find.text('外部插件（VST2 / VST3）'),
       200,
       scrollable: find
           .descendant(
@@ -441,9 +474,9 @@ void main() {
           )
           .first,
     );
-    await tester.ensureVisible(find.text('外部 VST3 插件'));
+    await tester.ensureVisible(find.text('外部插件（VST2 / VST3）'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('外部 VST3 插件'));
+    await tester.tap(find.text('外部插件（VST2 / VST3）'));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.byType(TextField),
@@ -1151,6 +1184,84 @@ void main() {
 
     expect(source.startCalls, [PedalTrigger.right]);
     expect(find.textContaining('正在查找手柄'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('扫描外部插件列出 VST2/VST3 结果并支持直接加载', (tester) async {
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pumpAndSettle();
+    final scrollable = find
+        .descendant(
+          of: find.byType(ListView),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+
+    await tester.scrollUntilVisible(
+      find.text('外部插件（VST2 / VST3）'),
+      200,
+      scrollable: scrollable,
+    );
+    await tester.tap(find.text('外部插件（VST2 / VST3）'));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('effects-scan')),
+      200,
+      scrollable: scrollable,
+    );
+    await tester.tap(find.byKey(const ValueKey('effects-scan')));
+    await tester.pumpAndSettle();
+
+    expect(backend.calls, contains('scan'));
+    expect(
+      backend.requests.firstWhere((r) => r['command'] == 'scan')['paths'],
+      isEmpty,
+    );
+    expect(
+      find.text('已扫描 1 个目录，发现 2 个插件（VST3 1 · VST2 1），耗时 42 ms'),
+      findsWidgets,
+    );
+
+    await tester.scrollUntilVisible(
+      find.text('扫描过程中的问题（1）'),
+      200,
+      scrollable: scrollable,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('扫描过程中的问题（1）'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('Test Reverb'),
+      200,
+      scrollable: scrollable,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Test Reverb'), findsOneWidget);
+    expect(find.text('VST3'), findsOneWidget);
+    expect(find.text('Test Audio · 版本 1.2.3 · Fx'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, '加载').first);
+    await tester.pumpAndSettle();
+    expect(
+      backend.requests.firstWhere((r) => r['command'] == 'load')['path'],
+      'C:/Plugins/Test Reverb.vst3',
+    );
+
+    await tester.scrollUntilVisible(
+      find.text('Legacy Synth'),
+      200,
+      scrollable: scrollable,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Legacy Synth'), findsOneWidget);
+    expect(find.text('VST2'), findsOneWidget);
+    expect(find.textContaining('Steinberg VST2 SDK'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 }

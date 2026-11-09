@@ -1,11 +1,14 @@
 #include <juce_audio_utils/juce_audio_utils.h>
+#include <array>
 #include <atomic>
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <thread>
 #include <vector>
 #include "builtin_effect.h"
 #include "builtin_effect_tests.h"
+#include "plugin_scanner.h"
 
 using namespace juce;
 
@@ -13,6 +16,16 @@ static var object(std::initializer_list<std::pair<Identifier, var>> fields) {
     auto* result = new DynamicObject();
     for (const auto& field : fields) result->setProperty(field.first, field.second);
     return var(result);
+}
+
+// The answers are written from the message thread and from the plugin scan,
+// so the protocol output has to be serialised.
+static std::mutex outputMutex;
+
+static void writeResponse(const var& response) {
+    const auto text = JSON::toString(response, true);
+    std::lock_guard<std::mutex> lock(outputMutex);
+    std::cout << text << std::endl;
 }
 
 class EditorWindow final : public DocumentWindow {
@@ -29,13 +42,33 @@ public:
 
 class Host final : public AudioIODeviceCallback {
 public:
-    Host() { formats.addFormat(std::make_unique<VST3PluginFormat>()); }
+    Host() {
+        formats.addFormat(std::make_unique<VST3PluginFormat>());
+#if GUITARBOOK_VST2_ENABLED
+        // The VST2 SDK is optional, so this format only exists in the builds
+        // that were configured with GUITARBOOK_ENABLE_VST2.
+        formats.addFormat(std::make_unique<VSTPluginFormat>());
+#endif
+    }
     ~Host() override {
         enabled = false;
         devices.removeAudioCallback(this);
         devices.closeAudioDevice();
         settings.reset();
         chain.clear();
+        for (auto& worker : scanWorkers)
+            if (worker.joinable()) worker.join();
+    }
+
+    // Picks the plugin format by file extension: .vst3 is always available,
+    // .dll needs a build that was compiled with the VST2 SDK.
+    AudioPluginFormat* formatForExtension(const String& extension) {
+        for (int index = 0; index < formats.getNumFormats(); ++index) {
+            auto* format = formats.getFormat(index);
+            if (extension == ".vst3" && format->getName() == "VST3") return format;
+            if (extension == ".dll" && format->getName() == "VST") return format;
+        }
+        return nullptr;
     }
 
     var command(const var& request) {
@@ -86,6 +119,8 @@ public:
             }
         } else if (action == "settings") {
             ensureDevice();
+            // The user may install a driver in the window, so rescan on open.
+            deviceBackendsScanned = false;
             if (!settings) {
                 settings = std::make_unique<EditorWindow>(String::fromUTF8("Audio devices / 输入输出设备"),
                     new AudioDeviceSelectorComponent(devices, 1, 1, 2, 2, false, false, false, false));
@@ -146,6 +181,17 @@ public:
             ensureDevice();
             failed = false;
             enabled = resume;
+        } else if (action == "inputChannel") {
+            // Pick the input channel that carries the instrument: "auto" follows
+            // the loudest channel, a fixed index keeps that one.
+            if (request["auto"].isBool() && static_cast<bool>(request["auto"])) {
+                monitoredChannel = -1;
+            } else {
+                const int index = request["index"];
+                if (index < 0 || index >= maxMonitoredInputs)
+                    throw String::fromUTF8("无效的输入通道。");
+                monitoredChannel = index;
+            }
         } else if (action == "builtin") {
             if (chain.size() >= 8) throw String::fromUTF8("最多添加 8 个效果器。");
             auto plugin = std::make_unique<BuiltinEffect>(request["kind"].toString());
@@ -164,11 +210,17 @@ public:
             auto path = request["path"].toString();
             if (!File::isAbsolutePath(path)) throw String::fromUTF8("请输入插件的绝对路径。");
             File file(path);
-            if (!file.exists() || !file.hasFileExtension("vst3"))
-                throw String::fromUTF8("请输入本平台 .vst3 文件或插件包的绝对路径。");
+            const auto extension = file.getFileExtension().toLowerCase();
+            auto* format = formatForExtension(extension);
+            if (format == nullptr)
+                throw String::fromUTF8(extension == ".dll"
+                    ? "当前构建未启用 VST2 加载（需要 Steinberg VST2 SDK），请改用 .vst3 插件。"
+                    : "请输入本平台 .vst3 文件或插件包的绝对路径。");
+            if (!file.exists()) throw String::fromUTF8("请输入本平台 .vst3 文件或插件包的绝对路径。");
             OwnedArray<PluginDescription> descriptions;
-            formats.getFormat(0)->findAllTypesForFile(descriptions, file.getFullPathName());
-            if (descriptions.isEmpty()) throw String::fromUTF8("没有找到兼容的 VST3 插件，请检查平台与 CPU 架构。");
+            format->findAllTypesForFile(descriptions, file.getFullPathName());
+            if (descriptions.isEmpty())
+                throw String::fromUTF8("没有找到兼容的 ") + format->getName() + String::fromUTF8(" 插件，请检查平台与 CPU 架构。");
             if (descriptions[0]->isInstrument) throw String::fromUTF8("第一版不支持虚拟乐器插件。");
             String error;
             auto plugin = formats.createPluginInstance(*descriptions[0], rate, block, error);
@@ -226,6 +278,35 @@ public:
             throw String::fromUTF8("未知宿主命令。");
         }
         return status();
+    }
+
+    // The plugin scan loads third party modules in a child process, so it may
+    // take a while. It is started here and the answer is sent as soon as the
+    // scan is done, the message thread stays free in the meantime.
+    void scanAsync(const var& request) {
+        const auto id = request["id"];
+        const auto paths = PluginScanner::extractPaths(request);
+        pendingScans.fetch_add(1);
+        auto worker = std::thread([this, id, paths] {
+            const auto result = PluginScanner::scanInChildProcess(paths);
+            MessageManager::callAsync([this, id, result] {
+                writeResponse(object({{"id", id}, {"result", result.toVar()}}));
+                pendingScans.fetch_sub(1);
+                if (inputFinished.load() && pendingScans.load() == 0)
+                    MessageManager::getInstance()->stopDispatchLoop();
+            });
+        });
+        std::lock_guard<std::mutex> lock(scanWorkerLock);
+        scanWorkers.push_back(std::move(worker));
+    }
+
+    // The answer of a scan is sent after the command line was read, so the
+    // message loop has to stay alive until the running scans are done.
+    void inputEnded() {
+        inputFinished = true;
+        MessageManager::callAsync([this] {
+            if (pendingScans.load() == 0) MessageManager::getInstance()->stopDispatchLoop();
+        });
     }
 
     // Offline integration mode never opens a sound device.
@@ -354,7 +435,36 @@ public:
         std::cout << "Editable built-in chain audio tests passed" << std::endl;
     }
 
+    // The device selector only offers ASIO when the host was compiled with
+    // JUCE_ASIO=1, so report the available backends and the ASIO drivers that
+    // were found. Scanning the drivers walks the registry, so the result is
+    // cached and refreshed whenever the device window is opened.
+    struct DeviceBackends {
+        Array<var> types;
+        Array<var> asioDrivers;
+    };
+
+    DeviceBackends deviceBackends() {
+        if (!deviceBackendsScanned) {
+            deviceBackendsCache.types.clear();
+            deviceBackendsCache.asioDrivers.clear();
+            for (auto* type : devices.getAvailableDeviceTypes()) {
+                if (type == nullptr) continue;
+                deviceBackendsCache.types.add(type->getTypeName());
+                if (type->getTypeName() == "ASIO") {
+                    type->scanForDevices();
+                    for (const auto& name : type->getDeviceNames(false))
+                        deviceBackendsCache.asioDrivers.add(name);
+                }
+            }
+            deviceBackendsScanned = true;
+        }
+        return deviceBackendsCache;
+    }
+
     var status() {
+        // The user may have switched device or driver in the settings window.
+        widenInputChannels();
         Array<var> plugins;
         int latency = 0;
         Array<var> wetOnly;
@@ -382,6 +492,8 @@ public:
         const auto setup = devices.getAudioDeviceSetup();
         const double blockMs = device ? 1000.0 * device->getCurrentBufferSizeSamples() / currentRate : 0.0;
         return object({{"audioOpen", device != nullptr}, {"backend", devices.getCurrentAudioDeviceType()},
+            {"deviceTypes", var(deviceBackends().types)},
+            {"asioDrivers", var(deviceBackends().asioDrivers)},
             {"inputDevice", setup.inputDeviceName}, {"outputDevice", setup.outputDeviceName},
             {"requestedBuffer", requestedBuffer}, {"setupNotice", setupNotice},
             {"pipewireQuantum", String::fromUTF8(std::getenv("PIPEWIRE_QUANTUM") ? std::getenv("PIPEWIRE_QUANTUM") : "")},
@@ -396,13 +508,18 @@ public:
             {"bufferSize", device ? device->getCurrentBufferSizeSamples() : block},
             {"device", device ? device->getName() : String()},
             {"inputChannels", device ? device->getActiveInputChannels().countNumberOfSetBits() : 0},
+            {"inputChannelNames", var(inputChannelNames())},
+            {"inputChannelLevels", var(inputChannelLevels())},
+            {"activeInputChannel", activeChannel.load()},
+            {"autoInputChannel", monitoredChannel.load() < 0},
             {"outputChannels", device ? device->getActiveOutputChannels().countNumberOfSetBits() : 0},
             // 3 s of continuous digital silence: long enough that a freshly
             // (re)opened device is not flagged before it delivers audio.
             {"noInputSignal", running && blockMs > 0.0 && silentBlocks.load() * blockMs >= 3000.0},
             {"latencyMs", device ? 1000.0 * (device->getInputLatencyInSamples()
                 + device->getOutputLatencyInSamples() + latency) / currentRate : 0.0},
-            {"cpu", devices.getCpuUsage()}, {"plugins", plugins}});
+            {"cpu", devices.getCpuUsage()}, {"vst2Supported", PluginScanner::vst2Supported()},
+            {"plugins", plugins}});
     }
 
     void audioDeviceAboutToStart(AudioIODevice* device) override {
@@ -437,10 +554,23 @@ public:
             if (outputs[ch]) FloatVectorOperations::clear(outputs[ch], samples);
         const ScopedTryLock lock(chainLock);
         if (!lock.isLocked() || !enabled || failed || samples > buffer.getNumSamples()) return;
-        // The device selector enables exactly one instrument input channel.
-        const float* input = nullptr;
-        for (int ch = 0; ch < numInputs; ++ch)
-            if (inputs[ch] != nullptr) { input = inputs[ch]; break; }
+        // The instrument is usually plugged into another input than the
+        // interface's first one, so every opened channel is measured and the
+        // one carrying the signal is monitored.
+        for (int ch = 0; ch < numInputs && ch < maxMonitoredInputs; ++ch) {
+            if (inputs[ch] == nullptr) continue;
+            float channelPeak = 0.0f;
+            for (int i = 0; i < samples; ++i)
+                channelPeak = jmax(channelPeak, std::abs(inputs[ch][i]));
+            auto& hold = channelPeaks[static_cast<size_t>(ch)];
+            hold.store(jmax(hold.load() * 0.995f, channelPeak));
+        }
+        const int requested = monitoredChannel.load();
+        const int channel = requested >= 0 && requested < numInputs
+            ? requested
+            : loudestChannel(numInputs);
+        activeChannel = channel;
+        const float* input = (channel >= 0 && channel < numInputs) ? inputs[channel] : nullptr;
         for (int ch = 0; ch < 2; ++ch) {
             if (input) buffer.copyFrom(ch, 0, input, samples);
             else buffer.clear(ch, 0, samples);
@@ -506,6 +636,67 @@ private:
         }
        #endif
     }
+    // The default setup only opens the interface's first input, but the
+    // instrument usually sits on another one. A few channels are opened so the
+    // host can measure them and monitor the one that carries the signal.
+    void widenInputChannels() {
+        auto* device = devices.getCurrentAudioDevice();
+        if (device == nullptr) return;
+        const auto setup = devices.getAudioDeviceSetup();
+        const auto key = devices.getCurrentAudioDeviceType() + "|" + setup.inputDeviceName
+            + "|" + setup.outputDeviceName;
+        // A driver that refuses the wider layout must not be retried forever.
+        if (key == widenedKey) return;
+        widenedKey = key;
+        const int available = device->getInputChannelNames().size();
+        if (available <= 1) return;
+        for (int wanted : {jmin(available, 8), jmin(available, 4), 2}) {
+            if (wanted <= 1) break;
+            auto wider = setup;
+            wider.useDefaultInputChannels = false;
+            wider.inputChannels.clear();
+            wider.inputChannels.setRange(0, wanted, true);
+            if (devices.setAudioDeviceSetup(wider, true).isEmpty()) return;
+            // The driver rejected this width: restore what it does accept.
+            devices.setAudioDeviceSetup(setup, true);
+        }
+    }
+    // The channel with the strongest signal. The current one is kept while it
+    // stays clearly louder, so the monitor does not jump between inputs
+    // between two notes.
+    int loudestChannel(int numInputs) const {
+        int best = -1;
+        float bestLevel = 0.0f;
+        for (int ch = 0; ch < numInputs && ch < maxMonitoredInputs; ++ch) {
+            const auto level = channelPeaks[static_cast<size_t>(ch)].load();
+            if (level > bestLevel) { bestLevel = level; best = ch; }
+        }
+        const int current = activeChannel.load();
+        if (current >= 0 && current < numInputs) {
+            const auto level = channelPeaks[static_cast<size_t>(current)].load();
+            if (level > 0.0f && level * 1.5f > bestLevel) return current;
+        }
+        return best;
+    }
+    // The opened input channels and their levels, reported in the same order.
+    Array<var> inputChannelNames() const {
+        Array<var> names;
+        auto* device = devices.getCurrentAudioDevice();
+        if (device == nullptr) return names;
+        const auto available = device->getInputChannelNames();
+        const auto active = device->getActiveInputChannels();
+        for (int ch = 0; ch < available.size() && ch < maxMonitoredInputs; ++ch)
+            if (active[ch]) names.add(available[ch]);
+        return names;
+    }
+    Array<var> inputChannelLevels() const {
+        Array<var> levels;
+        auto* device = devices.getCurrentAudioDevice();
+        const auto active = device == nullptr ? BigInteger(0) : device->getActiveInputChannels();
+        for (int ch = 0; ch < maxMonitoredInputs; ++ch)
+            if (active[ch]) levels.add(static_cast<double>(channelPeaks[static_cast<size_t>(ch)].load()));
+        return levels;
+    }
     void ensureDevice() {
         if (devices.getCurrentAudioDevice() != nullptr) return;
         if (initialised) {
@@ -549,6 +740,7 @@ private:
         callbackAdded = true;
         initialised = true;
         if (devices.getCurrentAudioDevice() == nullptr) throw String::fromUTF8("无法打开声卡，请检查设备与系统音频设置。");
+        widenInputChannels();
     }
     void tryRecoverDevice() {
         const auto now = juce::Time::getHighResolutionTicks();
@@ -590,6 +782,8 @@ private:
    #endif
     const bool externalPipewireQuantum = std::getenv("PIPEWIRE_QUANTUM") != nullptr;
     String setupNotice;
+    DeviceBackends deviceBackendsCache;
+    bool deviceBackendsScanned = false;
     bool initialised = false;
     bool callbackAdded = false;
     bool monitorRequested = false;
@@ -598,6 +792,21 @@ private:
     std::atomic<int> silentBlocks{0};
     std::atomic<bool> enabled{false}, failed{false};
     std::atomic<float> inputPeak{0}, outputPeak{0}, gain{0.5f};
+    // The plugin scans run outside the message thread and are joined when the
+    // host shuts down.
+    std::mutex scanWorkerLock;
+    std::vector<std::thread> scanWorkers;
+    // The number of scans that still have to be answered and the state of the
+    // command line, they keep the message loop alive.
+    std::atomic<int> pendingScans{0};
+    std::atomic<bool> inputFinished{false};
+    // Instrument inputs: the guitar is usually not on the interface's first
+    // input, so a few channels are opened and measured.
+    static constexpr int maxMonitoredInputs = 8;
+    std::atomic<int> monitoredChannel{-1};   // -1 = follow the loudest channel
+    std::atomic<int> activeChannel{-1};
+    std::array<std::atomic<float>, maxMonitoredInputs> channelPeaks{};
+    String widenedKey;
 };
 
 int main(int argc, char** argv) {
@@ -611,19 +820,39 @@ int main(int argc, char** argv) {
         try { host.test(String::fromUTF8(argv[2])); return 0; }
         catch (const String& error) { std::cerr << error << std::endl; return 1; }
     }
+    if (argc == 3 && String(argv[1]) == "--scan") {
+        // Scan child process: the parent starts this executable to read the
+        // plugin metadata in a separate process, so a broken plugin module
+        // cannot take the host down. The result is one JSON line.
+        try {
+            const auto request = JSON::parse(File(String::fromUTF8(argv[2])).loadFileAsString());
+            const auto result = PluginScanner::scanInProcess(PluginScanner::extractPaths(request));
+            writeResponse(result.toVar());
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << std::endl;
+            return 1;
+        }
+    }
     std::thread reader([&host] {
         std::string line;
         while (std::getline(std::cin, line)) {
             auto request = JSON::parse(String::fromUTF8(line.c_str()));
+            if (request["command"].toString() == "scan") {
+                // The answer is sent later, the scan must not block the
+                // message thread.
+                host.scanAsync(request);
+                continue;
+            }
             MessageManager::callAsync([&host, request] {
                 var response;
                 try { response = object({{"id", request["id"]}, {"result", host.command(request)}}); }
                 catch (const String& error) { response = object({{"id", request["id"]}, {"error", error}}); }
                 catch (const std::exception& error) { response = object({{"id", request["id"]}, {"error", String(error.what())}}); }
-                std::cout << JSON::toString(response, true) << std::endl;
+                writeResponse(response);
             });
         }
-        MessageManager::callAsync([] { MessageManager::getInstance()->stopDispatchLoop(); });
+        host.inputEnded();
     });
     MessageManager::getInstance()->runDispatchLoop();
     reader.join();
