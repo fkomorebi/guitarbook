@@ -250,6 +250,32 @@ flutter devices
 
 Linux 可安装 `pulseaudio-utils` 和 `ffmpeg` 以提供上述命令。Web 使用安全来源；其他平台请检查系统麦克风隐私设置。当前仅支持标准调弦与固定基准音。
 
+## 网页版自动部署（GitHub Actions，2026-11-09）
+
+仓库内置 `.github/workflows/deploy-web.yml`：代码推送到 `main` 后，GitHub Actions 会自动构建 Web Release 版本并发布到 GitHub Pages；Pull Request 只构建、不发布。
+
+启用方式（需要仓库管理员操作一次）：
+
+1. 打开仓库 **Settings → Pages**，在 **Build and deployment → Source** 中选择 **GitHub Actions**。
+2. 把代码推送到 `main`，或在 **Actions** 页手动运行 “Deploy Web to GitHub Pages”。
+
+发布地址：<https://fkomorebi.github.io/guitarbook/>
+
+| 工作流步骤 | 说明 |
+| --- | --- |
+| `flutter pub get` → `flutter analyze` → `flutter test` | 与本地开发检查一致，任何一步失败都不会发布 |
+| `flutter build web --release --base-href /guitarbook/` | 按 Pages 子路径生成资源引用，页面部署在仓库根路径之外也不会 404 |
+| `--no-web-resources-cdn` | 把 CanvasKit 渲染引擎一并打进产物，运行时不再依赖 `gstatic.com` 的 CDN；代价是产物体积更大 |
+| `actions/deploy-pages` | 发布到 GitHub Pages 并输出访问地址 |
+
+注意事项：
+
+- 在 Settings → Pages 里把 Source 选为 GitHub Actions 之前，部署步骤会失败；这个设置只需做一次。
+- 麦克风需要 HTTPS 或 localhost 才能授权，GitHub Pages 的 `https://` 地址满足要求；首次访问仍需在浏览器里允许使用麦克风。
+- 页面带 Service Worker，发布后短时间内旧版本可能仍被缓存；看不到新版本时强制刷新（Ctrl / Cmd + Shift + R）或等待缓存过期。
+- 运行时中文字体仍由 Flutter 引擎从 `fonts.gstatic.com` 下载回退字体；若网络无法访问该域名，界面中文会显示为方框，需要在应用内自带中文字体才能完全离线。
+- 只发布 `main` 分支的构建结果；公开仓库的页面地址对所有人可见。
+
 ## 开发检查
 
 ```bash

@@ -1,6 +1,6 @@
 # 最新功能设计
 
-最后更新：2026-11-05
+最后更新：2026-11-09
 
 ## 文档职责
 
@@ -30,6 +30,7 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 | 和弦练习 | 零基础第一版 | 已实现 12 课、五类 C 七和弦示例、三和弦探索、六个开放和弦与转换练习 | 六平台共用纯 Flutter 界面；设备运行待验证 |
 | 音阶指板 | 本次新增 | 已实现音阶入门及各音阶说明、12 主音、常用音阶、CAGED / 一弦三音与横向 22 品展示 | 六平台共用纯 Flutter 代码；设备显示待验证 |
 | 吉他调音器 | 本次标准调弦范围已实现 | 自动/手动选弦、音高检测、平滑指针、稳定调准反馈及 3 秒丢音保持已实现，静态分析与独立算法/反馈检查通过 | 六平台采集接入；Linux Debug 构建通过，各平台设备采集待验证 |
+| Web 自动部署（GitHub Actions） | 本次新增（2026-11-09） | 已实现工作流 `.github/workflows/deploy-web.yml`：`main` 推送或手动触发时执行静态分析、测试与 `flutter build web --release`，经 `actions/deploy-pages` 发布到 GitHub Pages；PR 只构建不发布 | 仅 Web；工作流尚未在 GitHub Actions 上实际运行，发布地址与构建产物均待验证 |
 
 已实现 Looper、鼓机、调音器、节拍器、音阶指板和和弦练习；实时效果器已接入 Android / iOS / Linux / Windows，包含 Linux 离线验证，真实音频待验证（2026-11-04 起效果器统一从首页“即兴工作台”进入，首页不再单列独立效果器入口）；电脑端浏览器版实时效果器（内置效果器）：DSP 内核与 Web 后端均已实现，静态分析、Node 离线回归、Chrome 浏览器 DSP 端到端与 Flutter Web 整页自动化实测通过；2026-11-03 完成真实声卡环回延迟实测（本机网页端约 67–75 ms 往返，页面侧有效项是 `latencyHint` 数字 0（省约 8 ms）、Chrome 启动参数 `--audio-buffer-size=128`（省约 21–27 ms，到约 45 ms）与网页内置的低延迟插入式采集 `MediaStreamTrackProcessor`（再省约 4 ms，到约 42 ms），再往下需改用桌面原生宿主），延迟诊断面板改为区分「浏览器报告输出侧 / 采集侧」与「需环回实测的往返延迟」并按实测收益给出优化建议，真机听感待用户验证。哇音的手柄线性扳机表情踏板（Linux / Windows 桌面与电脑端浏览器）已实现；2026-11-03 修复了 Flutter debug 下 Dart VM 采样分析器 SIGPROF 打断 `poll(2)`、`EINTR` 被误判为断开而每秒重连的问题（CLI 探针稳定就绪；GUI 端到端已在 profiler 开启的 Debug 构建中验证，真实扳机读数待实测），并补齐失败原因提示与宿主诊断脚本；2026-11-03 另修正工作台“没有收到输入数据”提示：只有连续 3 秒精确数字静音才提示，文案改为指向输入源/接口，并实测本机系统默认输入被设为声卡回环时采不到吉他。2026-11-05 新增「智能base」：在工作台内复用同一路输入实时识别当前和弦，按鼓机 BPM、拍号与底鼓落点自动整出一条与鼓机小节等长、同步的低音线（三种编排风格、独立音量、和弦变化落在下一拍、相位自动对齐），静态分析与完整 263 项 Flutter 测试通过，Linux Debug 与 Web Release 构建通过，六平台真机听感待验证。后续工具及优先级待确定。
 
@@ -100,6 +101,8 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 | 2026-10-26 | 完成应用基础框架与工具首页空状态，移除计数器示例；具体工具继续待确定。 |
 
 | 2026-11-04 | 移除首页独立的实时效果器入口，效果器统一并入即兴工作台（进入工作台先检测引擎与设备，需手动点击“开始监听”）；首页“03 即兴创作”分组改为单张“即兴工作台”卡片（描述“鼓机伴奏 · Looper 叠录与实时效果器”，图标 `Icons.queue_music`），宽屏下铺满整行。复跑验证见“即兴工作台接入效果器”与“电脑端 Web 效果器”两节的 2026-11-04 记录。 |
+
+| 2026-11-09 | 新增 Web 版自动部署：新增 `.github/workflows/deploy-web.yml`，`main` 推送或手动触发时自动构建 Web Release 并发布到 GitHub Pages（PR 只构建）；构建使用 `--base-href` 适配 Pages 子路径，并用 `--no-web-resources-cdn` 把 CanvasKit 打进产物以摆脱 gstatic CDN 依赖。README 三语同步新增“网页版自动部署”说明，详见“Web 自动部署”一节。 |
 
 ## 调音器
 
@@ -528,3 +531,17 @@ README 面向使用者，说明各平台有什么功能、如何使用；本文�
 - 顺带修复：停止时原本在动作队列里等待取消输入订阅，一旦该取消迟迟不完成，后续所有踏板动作都会被冻结；改为不阻塞队列的取消，队列只继续执行停止输入与释放音源。
 - 验收条件：删除中间层后层数正确；删除基准层后循环长度不变；删除唯一层时归零并停止；撤销后恢复该层且相位对齐；删掉最后一层后撤销会重新开始循环；录音或忙碌期间拒绝删除；清空后不可恢复；层级方块删除按钮、撤销提示条在常规与紧凑布局下均可用。
 - 验证结果（2026-11-04）：`flutter analyze lib test` 无问题；完整 Flutter 测试 230 项通过（新增 `test/looper_layer_delete_test.dart` 9 项）；`flutter build linux --debug` 与 `flutter build web --release` 构建通过。六平台真实设备上删除某一层后的听感与相位待验证。
+
+## Web 自动部署（GitHub Actions，2026-11-09）
+
+- 范围：新增仓库级工作流 `.github/workflows/deploy-web.yml`，在 `main` 分支推送与手动触发时自动构建 Web Release 并发布到 GitHub Pages；Pull Request 只构建、不发布。目标是给 Web 版一个稳定的在线访问地址（<https://fkomorebi.github.io/guitarbook/>），不改变应用功能、界面与各平台工程。
+- 触发与权限：事件为 `push`（`main`）、`pull_request`（`main`）与 `workflow_dispatch`；工作流权限 `contents: read`、`pages: write`、`id-token: write`；同一分支并发时取消旧构建，`main` 分支不取消，避免中断正在进行的部署。工作流不含任何密钥。
+- 构建流程：checkout → `subosito/flutter-action` 安装 Flutter 3.44.3（stable，与 `pubspec.yaml` 的 `^3.12.0` 约束一致）→ `flutter pub get` → `flutter analyze --no-fatal-infos --no-fatal-warnings` → `flutter test` → `actions/configure-pages` → `flutter build web --release --base-href "${{ steps.pages.outputs.base_path }}/" --no-web-resources-cdn` → 生成 `.nojekyll` → `actions/upload-pages-artifact` → `actions/deploy-pages`（`environment: github-pages`，输出访问地址）。任何检查失败都不发布。
+- 子路径部署：Pages 以 `https://<user>.github.io/<repo>/` 形式提供，`--base-href` 必须与该路径一致，否则 `flutter_bootstrap.js`、CanvasKit 与 `web/effects_worklet.js` 等静态资源会 404。`base_path` 取自 `actions/configure-pages` 的输出，仓库改名或迁移时无需改工作流。应用侧不依赖绝对路径：`lib/features/effects/effects_backend_web.dart` 以相对路径 `effects_worklet.js` 加载 DSP worklet，`web/index.html` 的 `<base href="$FLUTTER_BASE_HREF">` 由构建期替换。
+- 离线资源策略：加 `--no-web-resources-cdn` 把 CanvasKit 渲染引擎打进产物（`build/web/canvaskit/`），运行时不再访问 `https://www.gstatic.com/flutter-canvaskit/`；该域名在部分网络不可达，默认配置下会导致页面起不来。代价是产物体积增大；删除该参数即可恢复 CDN 模式。
+- 需要仓库管理员操作一次：在 Settings → Pages 把 Build and deployment 的 Source 选为 GitHub Actions，否则部署步骤失败。
+- 已知限制：页面带 Service Worker，发布后短时间内旧版本可能仍被缓存；中文字体回退仍由 Flutter 引擎在运行时从 `https://fonts.gstatic.com/s/` 下载，该域名不可达时界面中文显示为方框；麦克风需要 HTTPS（Pages 的 `https://` 地址满足）或 localhost；公开仓库的页面地址对所有人可见。
+- 实现状态：已实现（`.github/workflows/deploy-web.yml`），尚未在 GitHub Actions 上实际运行过。
+- 验收条件：推送 `main` 后 Actions 出现 “Deploy Web to GitHub Pages” 运行记录且为绿色；Pages 地址可打开首页并进入各工具；页面资源（CanvasKit、`effects_worklet.js`）无 404；麦克风可授权并开始监听；PR 的运行不产生部署。
+- 验证结果（2026-11-09）：未验证。当前执行环境无法运行 Flutter 工具链（`flutter --version` 在沙箱内无输出并超时），构建命令与工作流均未经实际执行；GitHub Actions 首次运行结果待回填。
+- 待确定：是否在应用内自带中文字体以摆脱 `fonts.gstatic.com` 依赖（当前字体资源 `assets/fonts/NotoSerif-Regular.ttf` 只含 Latin 字形）；是否保留 `--no-web-resources-cdn`（产物体积与可用性的取舍）；是否为 Web 版增加版本号显示或更新提示。

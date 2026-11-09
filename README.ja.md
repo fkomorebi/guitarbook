@@ -141,6 +141,32 @@ flutter run -d <device-id>
 
 詳細は [中国語のセットアップ・操作説明](README.md)、[デスクトップエフェクト](native/effects_host/README.md)、[モバイルエフェクト](native/mobile_effects/README.md)、[現在の機能設計](docs/FEATURES.md) を参照してください。
 
+## Web 版の自動デプロイ（GitHub Actions、2026-11-09）
+
+リポジトリには `.github/workflows/deploy-web.yml` を用意しています。`main` への push で GitHub Actions が Web Release をビルドして GitHub Pages に公開します。Pull Request はビルドのみで、公開はしません。
+
+有効化は一度だけ（リポジトリ管理者権限が必要です）：
+
+1. **Settings → Pages** を開き、**Build and deployment → Source** で **GitHub Actions** を選びます。
+2. `main` に push するか、**Actions** タブから “Deploy Web to GitHub Pages” を手動実行します。
+
+公開先：<https://fkomorebi.github.io/guitarbook/>
+
+| ステップ | 内容 |
+| --- | --- |
+| `flutter pub get` → `flutter analyze` → `flutter test` | ローカル開発と同じ検査。いずれかが失敗すると公開しません |
+| `flutter build web --release --base-href /guitarbook/` | Pages のサブパスに合わせて参照リンクを生成するため、リポジトリ直下以外でもアセットが 404 になりません |
+| `--no-web-resources-cdn` | CanvasKit レンダラーを成果物一起に同梱し、実行時の `gstatic.com` CDN 依存を無くします（成果物のサイズは増えます） |
+| `actions/deploy-pages` | GitHub Pages に公開し、公開先 URL を表示します |
+
+注意：
+
+- Settings → Pages の Source を GitHub Actions に指定するまではデプロイ手順が失敗します。この設定は一度だけで済みます。
+- マイクは HTTPS または localhost でのみ許可されます。GitHub Pages の `https://` URL は条件を満たしますが、初回アクセス時にブラウザーの許可が必要です。
+- ページに Service Worker が含まれるため、公開直後は古い版がキャッシュされることがあります。最新版が表示されない場合は強制再読み込み（Ctrl / Cmd + Shift + R）してください。
+- 実行時の中文字体は Flutter エンジンが `fonts.gstatic.com` からフォールバックとして取得します。同ドメインに接続できない環境では中文が豆腐（□）表示になるため、完全にオフラインで使うにはアプリ内に中文字体を同梱する必要があります。
+- 公開されるのは `main` のビルド結果のみで、公開リポジトリではページが誰でも閲覧できます。
+
 ## PR 歓迎！
 
 ドラムのリズム・音色、Looper の操作や同期、エフェクト DSP、プラットフォーム対応、アクセシビリティ、翻訳、ドキュメントへの貢献を歓迎します。大きな設計変更は、先に Issue で相談してください。

@@ -141,6 +141,32 @@ Desktop targets can use `linux`, `windows` or `macos`; Web can use `chrome`. iOS
 
 See the [detailed Chinese setup and usage guide](README.md), [desktop effects host guide](native/effects_host/README.md), [mobile effects guide](native/mobile_effects/README.md) and [current feature design](docs/FEATURES.md) for dependencies, diagnostics and verification records.
 
+## Automatic web deployment (GitHub Actions, 2026-11-09)
+
+The repository ships `.github/workflows/deploy-web.yml`: pushing to `main` makes GitHub Actions build the Web release and publish it to GitHub Pages. Pull requests are built but never published.
+
+Enable it once (repository admin required):
+
+1. Open **Settings → Pages** and set **Build and deployment → Source** to **GitHub Actions**.
+2. Push to `main`, or run the “Deploy Web to GitHub Pages” workflow manually from the **Actions** tab.
+
+Published at <https://fkomorebi.github.io/guitarbook/>
+
+| Step | Purpose |
+| --- | --- |
+| `flutter pub get` → `flutter analyze` → `flutter test` | Same checks as local development; any failure stops the deployment |
+| `flutter build web --release --base-href /guitarbook/` | Generates resource references for the Pages sub-path, so assets do not 404 outside the repository root |
+| `--no-web-resources-cdn` | Bundles the CanvasKit renderer into the artifact instead of loading it from the `gstatic.com` CDN at runtime; the artifact is larger as a result |
+| `actions/deploy-pages` | Publishes to GitHub Pages and reports the site URL |
+
+Notes:
+
+- Until **Source** is set to GitHub Actions in Settings → Pages, the deploy step fails; this is a one-time setting.
+- Microphone access requires HTTPS or localhost; the `https://` GitHub Pages URL qualifies, and the browser still asks for permission on the first visit.
+- The page ships a Service Worker, so a stale version may stay cached for a short while after a deploy; force a refresh (Ctrl / Cmd + Shift + R) if the new version does not show up.
+- CJK fallback fonts are still downloaded at runtime from `fonts.gstatic.com`. If that domain is unreachable, Chinese text renders as boxes; bundling a CJK font inside the app is required for fully offline use.
+- Only `main` is published, and a public repository exposes the page to everyone.
+
 ## PRs welcome
 
 Contributions to drum grooves and sound, Looper workflow and synchronization, effects DSP, platform support, accessibility, translations and documentation are welcome! Open an issue first for substantial design changes.
