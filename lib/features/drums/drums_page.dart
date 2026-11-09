@@ -1,6 +1,8 @@
 import '../../app/theme.dart';
 import 'package:flutter/material.dart';
 
+import '../band/band_controller.dart';
+import '../band/band_panel.dart';
 import '../effects/effects_page.dart';
 import '../effects/effects_backend.dart';
 import '../looper/looper_panel.dart';
@@ -43,6 +45,7 @@ class DrumsPage extends StatefulWidget {
 class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
   late final MetronomeController _controller;
   late final SmartBassController _smartBass;
+  late final BandController _band;
   final _recordingOutputs = <RecordingAudio>{};
   late final SharedLoopInput _sharedInput;
   late final LooperController _looper;
@@ -161,16 +164,26 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
       audioFactory: () => _tap(createLoopAudio()),
       drumPosition: () => _controller.position,
     )..addListener(_refresh);
+    // 乐队 · 和弦进行只做合成，不需要麦克风，自己占一路循环音频。
+    _band = BandController(
+      audioFactory: () => _tap(createLoopAudio()),
+      drumPosition: () => _controller.position,
+    )..addListener(_refresh);
     _syncGroove();
     WidgetsBinding.instance.addObserver(this);
   }
 
-  /// 把鼓机当前的编排同步给智能base，保证低音和鼓机在同一张网格上。
+  /// 把鼓机当前的编排同步给智能base和和弦进行，保证三者在同一张网格上。
   void _syncGroove() {
     _smartBass.setGroove(
       bpm: _controller.bpm,
       meter: _meter,
       hits: _hits,
+      swing: _swing,
+    );
+    _band.setGroove(
+      bpm: _controller.bpm,
+      meter: _meter,
       swing: _swing,
     );
   }
@@ -195,6 +208,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
       _stopPreview();
       // 后台释放输入，避免一直占着麦克风。
       unawaited(_smartBass.disable());
+      unawaited(_band.disable());
     }
   }
 
@@ -209,6 +223,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
     _smartBass.removeListener(_refresh);
     // 先释放智能base，它还占着共享输入通道的一路租约。
     _smartBass.dispose();
+    _band.removeListener(_refresh);
+    _band.dispose();
     if (widget.looperController == null) _looper.dispose();
     _sharedInput.dispose();
     super.dispose();
@@ -251,6 +267,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                         '点击鼓件名称可静音，点击格子编辑十六分音符。修改鼓机参数会从首拍重启。窄屏用分页查看全部鼓点。\n\n'
                         '拍号可选 4/4、3/4、2/4、5/4、6/8、7/8，切换后自动载入该拍号的默认节奏，速度与音量保持不变。x/4 拍号一拍是四分音符，x/8 拍号一拍是八分音符，网格始终按十六分音符划分，摇摆会把每个八分音符的后半拍往后拖。\n\n'
                         '「智能base」会听你弹的和弦，按当前速度、拍号和底鼓落点自动编排一条低音：开启后弹一个和弦，它会在下一拍落下新根音，并一直跟着鼓机循环。风格可在跟底鼓、根音律动、走动低音之间切换，低音音量独立可调。它和 Looper、即兴录音共用同一个输入通道，不会重复打开麦克风。\n\n'
+                        '「乐队 · 和弦进行」是乐队的第三层，在鼓机和智能base之上加一层和弦：可选择流行、摇滚、布鲁斯等和弦进行，演奏方式在柱式、律动、琶音、扫弦之间切换，音量独立可调。它只用合成音，不占用麦克风；和弦进行会从鼓机当前的小节位置开始，换和弦或换演奏方式即时生效。\n\n'
                         '录音与鼓机独立循环，不自动对拍。下方效果器会静音检测引擎和声卡，手动开始监听；鼓机音量、Looper 回放音量与效果器输出音量可独立调节。Android / iOS / Linux / Windows 的 Looper 录入效果器处理后的声音，需先开始监听并设为 48 kHz；其他平台录原始输入。请用耳机避免伴奏串入录音。\n\n'
                         '顶部“即兴录音”可录下三路混音，内存满后覆盖最早片段；停止后可试听或保存 WAV。进入后台会停止播放与采集；离开工作台清空未保存录音和设置。声音受系统音量影响，蓝牙可能增加延迟。',
                       ),
@@ -324,6 +341,8 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
                           ],
                           const SizedBox(height: 16),
                           SmartBassPanel(controller: _smartBass),
+                          const SizedBox(height: 16),
+                          BandPanel(controller: _band),
                           const SizedBox(height: 16),
                           EffectsPage(
                             key: const ValueKey('jam-effects'),

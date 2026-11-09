@@ -99,7 +99,7 @@ class ToolsPage extends StatelessWidget {
                     tools: [
                       _Tool(
                         '即兴工作台',
-                        '鼓机伴奏 · Looper 叠录与实时效果器',
+                        '鼓机 · 智能base · 和弦进行 · Looper 与实时效果器',
                         Icons.queue_music,
                         DrumsPage(),
                       ),
