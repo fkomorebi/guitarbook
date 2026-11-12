@@ -74,6 +74,9 @@ public:
     }
 
     const juce::String getName() const override { return title; }
+    // 供测试与自动化使用：按 add() 顺序返回已注册到 AudioProcessor 的浮点参数。
+    // 基类 getParameters() 只返回 juce::AudioProcessorParameter*，读不到量程与默认值。
+    const std::vector<juce::AudioParameterFloat*>& getFloatParameters() const { return parameters; }
     void prepareToPlay(double sampleRate, int) override {
         rate = sampleRate;
         for (size_t i = 0; i < parameters.size(); ++i) {

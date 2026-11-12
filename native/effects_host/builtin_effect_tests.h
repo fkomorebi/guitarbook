@@ -332,8 +332,10 @@ inline void testBuiltinDsp() {
     // 参数表：6 个参数，名称 / 量程 / 默认值 / 顺序必须与规格 §2 一致。
     {
         BuiltinEffect marimba("marimba");
-        const auto& parameters = marimba.getParameters();
-        requireZh(parameters.size() == 6, "箱琴参数数量与规格不一致");
+        // 基类 getParameters() 只返回 juce::AudioProcessorParameter*，读不到量程与默认值；
+        // getFloatParameters() 返回具体的 AudioParameterFloat 指针（与已注册到处理器的列表同源）。
+        const auto& parameters = marimba.getFloatParameters();
+        requireZh(parameters.size() == 6 && marimba.getParameters().size() == 6, "箱琴参数数量与规格不一致");
         const float minimums[6] = {-12.0f, 0.2f, 0.0f, 0.0f, 0.0f, 0.0f};
         const float maximums[6] = {12.0f, 4.0f, 1.0f, 1.0f, 1.0f, 1.0f};
         const float initials[6] = {0.0f, 1.2f, 0.6f, 0.5f, 1.0f, 0.8f};
