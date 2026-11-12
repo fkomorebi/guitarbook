@@ -35,7 +35,7 @@ function runDspAssertions () {
   check('注册名常量', G.PROCESSOR_NAME === 'guitarbook-effects', G.PROCESSOR_NAME);
 
   const kinds = G.BUILTIN_KINDS;
-  check('11 种内置效果器', kinds.length === 11, kinds.join(','));
+  check('12 种内置效果器', kinds.length === 12, kinds.join(','));
 
   // 静音输入 → 静音输出
   {
@@ -47,7 +47,7 @@ function runDspAssertions () {
     check('静音输入 → 静音输出', peak === 0, 'peak=' + peak);
   }
 
-  // 三种采样率 × 11 kind，参数取 0/1，输出必须有限
+  // 三种采样率 × 12 kind，参数取 0/1，输出必须有限
   {
     let bad = '';
     let count = 0;
@@ -68,7 +68,7 @@ function runDspAssertions () {
         }
       }
     }
-    check('3 采样率 × 11 kind 输出有限 (' + count + ' 组)', bad === '', bad);
+    check('3 采样率 × 12 kind 输出有限 (' + count + ' 组)', bad === '', bad);
   }
 
   // amp 参考渲染（对齐原生 renderAmp：输入 0.12*(sin110+sin997+sin6000)）
@@ -229,6 +229,56 @@ function runDspAssertions () {
     let tail = 0;
     for (let i = 1000; i < 4096; i++) tail = Math.max(tail, Math.abs(wet[i]));
     check('reverb mix=1 → [1000,4096) 有尾巴 > 0.0001', tail > 0.0001, 'tail=' + tail.toExponential(3));
+  }
+
+  // 箱琴 Marimba（权威规格 docs/marimba_effect_spec.md §8）
+  {
+    const MARIMBA_RATE = 48000;
+    const renderMarimba = (params, samples) => {
+      const fx = new G.BuiltinEffect('marimba', MARIMBA_RATE);
+      for (let i = 0; i < params.length; i++) fx.setParameterValue(i, params[i]);
+      fx.prepareToPlay(MARIMBA_RATE, 512);
+      const l = new Float64Array(samples), r = new Float64Array(samples);
+      for (let i = 0; i < samples; i++) {
+        const t = i / MARIMBA_RATE;
+        const ramp = t < 0.02 ? t / 0.02 : 1;
+        const s = 0.3 * ramp * Math.sin(t * 2 * Math.PI * 220);
+        l[i] = s; r[i] = s;
+      }
+      fx.processBlock(l, r, samples);
+      return l;
+    };
+    // 基频估计：上升过零间隔的中位数（与 tool/effects_worklet_test.js 同法）
+    const estimatePitch = (buffer, start, count) => {
+      const intervals = [];
+      let last = -1;
+      for (let i = start + 1; i < start + count; i++) {
+        if (buffer[i - 1] <= 0 && buffer[i] > 0) {
+          if (last >= 0) intervals.push(i - last);
+          last = i;
+        }
+      }
+      if (intervals.length < 8) return 0;
+      intervals.sort((a, b) => a - b);
+      return MARIMBA_RATE / intervals[Math.floor(intervals.length / 2)];
+    };
+
+    const wet = renderMarimba([0, 1.2, 0.6, 0.5, 1, 1], 12000);
+    let first = -1;
+    for (let i = 0; i < wet.length; i++) { if (wet[i] !== 0) { first = i; break; } }
+    check('箱琴：拨弦后约 53 ms 出现音符', first > 2400 && first < 3600, 'first=' + first);
+    const hz = first >= 0 ? estimatePitch(wet, first, 4800) : 0;
+    check('箱琴：音符音高 ≈ 220 Hz', Math.abs(hz - 220) < 5, 'hz=' + hz.toFixed(3));
+
+    const dry = renderMarimba([0, 1.2, 0.6, 0.5, 0, 1], 4096);
+    let maxDiff = 0;
+    for (let i = 0; i < 4096; i++) {
+      const t = i / MARIMBA_RATE;
+      const ramp = t < 0.02 ? t / 0.02 : 1;
+      const s = 0.3 * ramp * Math.sin(t * 2 * Math.PI * 220);
+      maxDiff = Math.max(maxDiff, Math.abs(dry[i] - s));
+    }
+    check('箱琴：干湿比 = 0 时干声直通', maxDiff < 1e-9, 'maxDiff=' + maxDiff);
   }
 
   // 新 delay 实例不继承尾巴

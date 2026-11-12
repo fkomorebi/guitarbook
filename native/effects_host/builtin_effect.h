@@ -1,6 +1,9 @@
 #pragma once
 #include <juce_audio_processors_headless/juce_audio_processors_headless.h>
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdint>
 #include <vector>
 
 // Original, deliberately small DSP effects; no external plugin assets required.
@@ -58,6 +61,15 @@ public:
             add("semitone", "移调", -12, 12, 0, "半音");
             add("mix", "干湿比", 0, 1, 1, "");
             add("level", "输出", 0, 1, 1, "");
+        } else if (kind == "marimba") {
+            // 箱琴：参数顺序 = 参数下标，两端（C++ / JS）必须一致（规格 docs/marimba_effect_spec.md §2）。
+            title = juce::String::fromUTF8("箱琴 Marimba");
+            add("transpose", "移调", -12, 12, 0, "半音");
+            add("decay", "衰减", 0.2f, 4, 1.2f, "s");
+            add("tone", "音色", 0, 1, 0.6f, "");
+            add("sensitivity", "触发", 0, 1, 0.5f, "");
+            add("mix", "干湿比", 0, 1, 1, "");
+            add("level", "输出", 0, 1, 0.8f, "");
         } else throw juce::String::fromUTF8("未知内置效果器。");
     }
 
@@ -95,6 +107,48 @@ public:
             pitchBlend = 1.0;
             pitchFilter[0][0] = pitchFilter[0][1] = 0.0;
             pitchFilter[1][0] = pitchFilter[1][1] = 0.0;
+        }
+        if (kind == "marimba") {
+            // 箱琴状态复位：分析常量、捕获缓冲、抽取滤波器、包络、起音计数、声部与噪声种子。
+            marimbaAnalysisRate = rate / marimbaDecimation;
+            marimbaMaxLag = std::max(3, static_cast<int>(std::floor(marimbaAnalysisRate / marimbaMinFrequency)));
+            marimbaLagMin = std::max(2, static_cast<int>(std::floor(marimbaAnalysisRate / marimbaMaxFrequency)));
+            marimbaCaptureLength = 4 * marimbaMaxLag;
+            marimbaCapture.assign(static_cast<size_t>(marimbaCaptureLength), 0.0);
+            marimbaDifference.assign(static_cast<size_t>(marimbaMaxLag) + 1, 0.0);
+            marimbaDecimator.fill(0.0);
+            marimbaDecimPhase = 0;
+            marimbaCaptureCount = 0;
+            marimbaCapturing = false;
+            marimbaArmed = true;
+            marimbaCapturePeak = 0.0;
+            marimbaFastEnv = 0.0;
+            marimbaShortEnergy = 0.0;
+            marimbaLongEnergy = 0.0;
+            marimbaRefractorySamples = static_cast<int>(rate * 0.015);
+            // 初值取不应期长度：首次起音立即可触发（不应期只抑制连续重复触发）。
+            marimbaSamplesSinceOnset = marimbaRefractorySamples;
+            marimbaDecimatorAlpha = 1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * 0.09);
+            marimbaFastRelease = std::exp(-1.0 / (rate * 0.010));
+            marimbaShortAlpha = 1.0 - std::exp(-1.0 / (rate * 0.006));
+            marimbaLongAlpha = 1.0 - std::exp(-1.0 / (rate * 0.060));
+            marimbaClickAlpha = 1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * 0.20);
+            marimbaClickDecay = std::exp(-1.0 / (rate * 0.008));
+            marimbaDecayTauBase = 1.0 / std::log(1000.0);
+            marimbaDecayCoef.fill(0.0);
+            marimbaLastDecay = -1.0;
+            marimbaNoiseSeed = 22222u;
+            marimbaNextVoiceAge = 0;
+            for (auto& voice : marimbaVoices) {
+                voice.active = false;
+                voice.age = 0;
+                voice.clickAmp = 0.0;
+                voice.clickLp = 0.0;
+                voice.phase.fill(0.0);
+                voice.step.fill(0.0);
+                voice.amp.fill(0.0);
+            }
+            updateMarimbaDecay(1.2);
         }
     }
     void releaseResources() override {}
@@ -195,6 +249,15 @@ public:
                     audio.setSample(ch, sample, input * (1 - values[2]) + echo * values[2]);
                 }
                 position = (position + 1) % delayBuffer.getNumSamples();
+            } else if (kind == "marimba") {
+                // 箱琴：干湿混合 + 输出增益（湿声本身带约 53 ms 的捕获窗口延迟，干声不补偿）。
+                const float inLeft = audio.getSample(0, sample);
+                const float inRight = audio.getSample(1, sample);
+                const double wet = processMarimbaSample(inLeft, inRight, values);
+                const double mix = static_cast<double>(values[4]);
+                const double level = static_cast<double>(values[5]);
+                audio.setSample(0, sample, static_cast<float>((static_cast<double>(inLeft) * (1.0 - mix) + wet * mix) * level));
+                audio.setSample(1, sample, static_cast<float>((static_cast<double>(inRight) * (1.0 - mix) + wet * mix) * level));
             } else {
                 const float alpha = 1 - std::exp(-juce::MathConstants<float>::twoPi * values[1] / static_cast<float>(rate));
                 for (int ch = 0; ch < 2; ++ch) {
@@ -234,7 +297,7 @@ public:
     juce::String kind;
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return kind == "delay" ? 30 : kind == "reverb" ? 10 : kind == "pitch" ? 0.1 : 0; }
+    double getTailLengthSeconds() const override { return kind == "delay" ? 30 : kind == "reverb" ? 10 : kind == "pitch" ? 0.1 : kind == "marimba" ? 6.0 : 0; }
     juce::AudioProcessorEditor* createEditor() override { return nullptr; }
     bool hasEditor() const override { return false; }
     int getNumPrograms() override { return 1; }
@@ -361,4 +424,233 @@ private:
     int pitchFade = -1;
     double pitchBlend = 1.0;
     std::array<std::array<double, 2>, 2> pitchFilter{};
+    // ---------------------------------------------------------------------------
+    // 箱琴 Marimba：起音检测 + YIN 音高检测 + 模态加法合成
+    // 规格：docs/marimba_effect_spec.md（与网页端 web/effects_worklet.js 1:1 对应）
+    // ---------------------------------------------------------------------------
+    static constexpr int marimbaPartialCount = 5;       // 分音数
+    static constexpr int marimbaVoiceCount = 4;          // 同时发声的声部数
+    static constexpr int marimbaDecimation = 4;          // 抽取倍数
+    static constexpr double marimbaMinFrequency = 75.0;  // 可检测最低频率
+    static constexpr double marimbaMaxFrequency = 1100.0;
+    static constexpr double marimbaOnsetBase = 0.05;     // 起音绝对阈值基准
+    static constexpr double marimbaEnergyRatio = 1.6;    // 起音判定：短时 / 长时能量比
+    static constexpr double marimbaRearmRatio = 1.02;    // 重新武装阈值
+    static constexpr double marimbaVelocityReference = 0.30;
+    static constexpr double marimbaVelocityFloor = 0.25;
+    static constexpr double marimbaVelocityCeiling = 1.0;
+    static constexpr double marimbaVoiceGain = 0.20;    // 单声部分音整体增益（槌击噪声不乘）
+    static constexpr double marimbaClickGain = 0.08;     // 槌击噪声初始增益
+    static constexpr double marimbaVoiceEndLevel = 1e-4; // 声部结束阈值
+    static constexpr double marimbaEnergyFloor = 0.002;  // 捕获窗口 RMS 下限
+    static constexpr double marimbaYinThreshold = 0.15;  // YIN 绝对阈值
+    static constexpr double marimbaPartialRatio[marimbaPartialCount] = {1.0, 2.0, 3.0, 4.0, 6.0};
+    static constexpr double marimbaPartialBase[marimbaPartialCount] = {1.0, 0.06, 0.03, 0.05, 0.0};
+    static constexpr double marimbaPartialDelta[marimbaPartialCount] = {0.0, 0.10, 0.12, 0.30, 0.07};
+    static constexpr double marimbaPartialDecayFactor[marimbaPartialCount] = {1.0, 0.55, 0.42, 0.30, 0.22};
+
+    struct MarimbaVoice {
+        bool active = false;
+        int age = 0;
+        double clickAmp = 0.0;
+        double clickLp = 0.0;
+        std::array<double, marimbaPartialCount> phase{};
+        std::array<double, marimbaPartialCount> step{};
+        std::array<double, marimbaPartialCount> amp{};
+    };
+    std::array<MarimbaVoice, marimbaVoiceCount> marimbaVoices{};
+    std::vector<double> marimbaCapture;                 // 抽取域捕获缓冲
+    std::vector<double> marimbaDifference;               // YIN 差分数组
+    std::array<double, marimbaPartialCount> marimbaDecayCoef{};
+    std::array<double, 4> marimbaDecimator{};
+    double marimbaAnalysisRate = 0.0;
+    int marimbaMaxLag = 0;
+    int marimbaLagMin = 0;
+    int marimbaCaptureLength = 0;
+    int marimbaDecimPhase = 0;
+    int marimbaCaptureCount = 0;
+    bool marimbaCapturing = false;
+    bool marimbaArmed = true;
+    double marimbaCapturePeak = 0.0;
+    double marimbaFastEnv = 0.0;
+    double marimbaShortEnergy = 0.0;
+    double marimbaLongEnergy = 0.0;
+    int marimbaRefractorySamples = 0;
+    int marimbaSamplesSinceOnset = 0;
+    double marimbaDecimatorAlpha = 0.0;
+    double marimbaFastRelease = 0.0;
+    double marimbaShortAlpha = 0.0;
+    double marimbaLongAlpha = 0.0;
+    double marimbaClickAlpha = 0.0;
+    double marimbaClickDecay = 0.0;
+    double marimbaDecayTauBase = 0.0;   // 1 / log(1000)
+    double marimbaLastDecay = -1.0;
+    std::uint32_t marimbaNoiseSeed = 22222u;
+    int marimbaNextVoiceAge = 0;
+
+    // 衰减参数变化时重算逐采样衰减系数（已发声的声部立即采用新值）。
+    void updateMarimbaDecay(double decay) {
+        if (std::abs(decay - marimbaLastDecay) <= 1e-6) return;
+        marimbaLastDecay = decay;
+        for (int p = 0; p < marimbaPartialCount; ++p) {
+            const size_t index = static_cast<size_t>(p);
+            const double tau = decay * marimbaDecayTauBase * marimbaPartialDecayFactor[index];
+            marimbaDecayCoef[index] = std::exp(-1.0 / (rate * tau));
+        }
+    }
+
+    // xorshift32 伪随机（与网页端逐位一致），返回 [-1, 1)。
+    double nextMarimbaNoise() {
+        std::uint32_t state = marimbaNoiseSeed;
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        marimbaNoiseSeed = state;
+        return (static_cast<double>(state & 0xFFFFFFu) / 8388607.5) - 1.0;
+    }
+
+    // 触发一个木琴声部（没有空闲声部时抢占最早触发的一个）。
+    void triggerMarimbaVoice(double frequency, double velocity) {
+        MarimbaVoice* voice = nullptr;
+        for (auto& candidate : marimbaVoices) {
+            if (!candidate.active) {
+                voice = &candidate;
+                break;
+            }
+        }
+        if (voice == nullptr) {
+            voice = &marimbaVoices[0];
+            for (auto& candidate : marimbaVoices)
+                if (candidate.age < voice->age) voice = &candidate;
+        }
+        voice->active = true;
+        voice->age = marimbaNextVoiceAge++;
+        voice->clickAmp = marimbaClickGain * velocity;
+        voice->clickLp = 0.0;
+        for (int p = 0; p < marimbaPartialCount; ++p) {
+            const size_t index = static_cast<size_t>(p);
+            voice->phase[index] = 0.0;
+            voice->amp[index] = 1.0;
+            voice->step[index] = juce::MathConstants<double>::twoPi * frequency * marimbaPartialRatio[index] / rate;
+        }
+    }
+
+    // YIN 音高检测（移植自 lib/features/tuner/pitch_detector.dart，规格 §5），检测失败返回 0。
+    double detectMarimbaPitch() {
+        if (marimbaMaxLag < 3 || marimbaCaptureLength <= marimbaMaxLag) return 0.0;
+        const int window = marimbaCaptureLength - marimbaMaxLag;
+        double mean = 0.0;
+        for (int i = 0; i < marimbaCaptureLength; ++i) mean += marimbaCapture[static_cast<size_t>(i)];
+        mean /= static_cast<double>(marimbaCaptureLength);
+        double energy = 0.0;
+        for (int i = 0; i < marimbaCaptureLength; ++i) {
+            const double delta = marimbaCapture[static_cast<size_t>(i)] - mean;
+            energy += delta * delta;
+        }
+        if (std::sqrt(energy / static_cast<double>(marimbaCaptureLength)) < marimbaEnergyFloor) return 0.0;
+        // 差分 + 累积均值归一化。
+        double cumulative = 0.0;
+        marimbaDifference[0] = 1.0;
+        for (int lag = 1; lag <= marimbaMaxLag; ++lag) {
+            double sum = 0.0;
+            for (int i = 0; i < window; ++i) {
+                const double delta = marimbaCapture[static_cast<size_t>(i)] - marimbaCapture[static_cast<size_t>(i + lag)];
+                sum += delta * delta;
+            }
+            cumulative += sum;
+            marimbaDifference[static_cast<size_t>(lag)] = cumulative == 0.0 ? 1.0 : sum * static_cast<double>(lag) / cumulative;
+        }
+        // 首个低于阈值的谷，抛物线插值细化滞后。
+        int lag = marimbaLagMin;
+        while (lag < marimbaMaxLag - 1) {
+            if (marimbaDifference[static_cast<size_t>(lag)] >= marimbaYinThreshold) {
+                ++lag;
+                continue;
+            }
+            while (lag + 1 < marimbaMaxLag && marimbaDifference[static_cast<size_t>(lag + 1)] < marimbaDifference[static_cast<size_t>(lag)])
+                ++lag;
+            if (lag >= marimbaMaxLag) return 0.0;
+            const double left = marimbaDifference[static_cast<size_t>(lag - 1)];
+            const double center = marimbaDifference[static_cast<size_t>(lag)];
+            const double right = marimbaDifference[static_cast<size_t>(lag + 1)];
+            const double denominator = left - 2.0 * center + right;
+            const double offset = denominator == 0.0 ? 0.0 : 0.5 * (left - right) / denominator;
+            return marimbaAnalysisRate / (static_cast<double>(lag) + offset);
+        }
+        return 0.0;
+    }
+
+    // 箱琴逐采样处理（规格 §4），返回湿声（未做干湿混合与输出增益）。
+    double processMarimbaSample(float inLeft, float inRight, const std::array<float, 8>& values) {
+        // 步骤 0：衰减参数变化时立即重算衰减系数。
+        updateMarimbaDecay(static_cast<double>(values[1]));
+        // 步骤 A：分析用单声道输入 + 快包络 + 短时 / 长时能量。
+        const double x = 0.5 * (static_cast<double>(inLeft) + static_cast<double>(inRight));
+        const double amplitude = std::abs(x);
+        marimbaFastEnv = std::max(amplitude, marimbaFastEnv * marimbaFastRelease);
+        const double power = amplitude * amplitude;
+        marimbaShortEnergy += marimbaShortAlpha * (power - marimbaShortEnergy);
+        marimbaLongEnergy += marimbaLongAlpha * (power - marimbaLongEnergy);
+        // 步骤 B：起音检测（短时能量相对长时能量突增 = 标准能量比起音检测）。
+        const double threshold = marimbaOnsetBase * std::pow(0.1, static_cast<double>(values[3]));
+        // 重新武装：一次起音触发后必须等能量回落到长时能量附近，才允许下一次起音（防止持续音连奏）。
+        if (!marimbaArmed && marimbaShortEnergy <= marimbaLongEnergy * marimbaRearmRatio) marimbaArmed = true;
+        // 捕获进行中忽略新的起音：保证音符起点固定在「首个起音 + 捕获窗口」。
+        if (marimbaArmed && !marimbaCapturing && marimbaFastEnv > threshold
+            && marimbaShortEnergy > marimbaLongEnergy * marimbaEnergyRatio
+            && marimbaSamplesSinceOnset >= marimbaRefractorySamples) {
+            marimbaSamplesSinceOnset = 0;
+            marimbaArmed = false;
+            marimbaCapturing = true;
+            marimbaCaptureCount = 0;
+            marimbaCapturePeak = 0.0;
+        }
+        ++marimbaSamplesSinceOnset;
+        if (marimbaCapturing && amplitude > marimbaCapturePeak) marimbaCapturePeak = amplitude;
+        // 步骤 C：4 倍抽取（4 级单极点低通级联），每 4 个采样点落一次抽取值。
+        marimbaDecimator[0] += marimbaDecimatorAlpha * (x - marimbaDecimator[0]);
+        marimbaDecimator[1] += marimbaDecimatorAlpha * (marimbaDecimator[0] - marimbaDecimator[1]);
+        marimbaDecimator[2] += marimbaDecimatorAlpha * (marimbaDecimator[1] - marimbaDecimator[2]);
+        marimbaDecimator[3] += marimbaDecimatorAlpha * (marimbaDecimator[2] - marimbaDecimator[3]);
+        ++marimbaDecimPhase;
+        if (marimbaDecimPhase >= marimbaDecimation) {
+            marimbaDecimPhase = 0;
+            if (marimbaCapturing) {
+                marimbaCapture[static_cast<size_t>(marimbaCaptureCount)] = marimbaDecimator[3];
+                ++marimbaCaptureCount;
+                if (marimbaCaptureCount >= marimbaCaptureLength) {
+                    marimbaCapturing = false;
+                    const double frequency = detectMarimbaPitch();
+                    if (frequency > 0.0) {
+                        // 力度取捕获窗口内的峰值幅度（比起音瞬间的包络更稳）。
+                        const double velocity = juce::jlimit(marimbaVelocityFloor, marimbaVelocityCeiling,
+                            marimbaCapturePeak / marimbaVelocityReference);
+                        triggerMarimbaVoice(frequency * std::pow(2.0, static_cast<double>(values[0]) / 12.0), velocity);
+                    }
+                }
+            }
+        }
+        // 步骤 D：声部合成（模态加法合成 + 槌击噪声）。
+        const double noise = nextMarimbaNoise();
+        const double tone = static_cast<double>(values[2]);
+        double wet = 0.0;
+        for (auto& voice : marimbaVoices) {
+            if (!voice.active) continue;
+            double sum = 0.0;
+            for (int p = 0; p < marimbaPartialCount; ++p) {
+                const size_t index = static_cast<size_t>(p);
+                voice.phase[index] += voice.step[index];
+                if (voice.phase[index] >= juce::MathConstants<double>::twoPi) voice.phase[index] -= juce::MathConstants<double>::twoPi;
+                sum += voice.amp[index] * (marimbaPartialBase[index] + marimbaPartialDelta[index] * tone)
+                    * std::sin(voice.phase[index]);
+                voice.amp[index] *= marimbaDecayCoef[index];
+            }
+            voice.clickLp += marimbaClickAlpha * (noise - voice.clickLp);
+            const double click = (noise - voice.clickLp) * voice.clickAmp;
+            voice.clickAmp *= marimbaClickDecay;
+            wet += sum * marimbaVoiceGain + click;
+            if (voice.amp[0] < marimbaVoiceEndLevel && voice.clickAmp < marimbaVoiceEndLevel) voice.active = false;
+        }
+        return wet;
+    }
 };

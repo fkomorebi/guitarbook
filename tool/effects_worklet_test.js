@@ -6,7 +6,7 @@
  * 断言镜像 native/effects_host/builtin_effect_tests.h（原生 JUCE C++ 回归），
  * 数值与契约一致：
  *   1. 静音输入 → 输出静音
- *   2. 44100/48000/96000 × 11 种 kind，参数在最小/最大值间来回切换 40 块 → 输出必须全部有限
+ *   2. 44100/48000/96000 × 12 种 kind，参数在最小/最大值间来回切换 40 块 → 输出必须全部有限
  *   3. amp 参考渲染：幅度 > 0.01；四款箱头两两 Σ|Δ| > 1；6 个参数各自能改变输出；
  *      master=0 → 静音；两个独立实例输出完全一致（不共享状态）
  *   4. wah：幅度 > 0.001；param0..3 各自改变输出；level=0 → 静音；
@@ -23,6 +23,9 @@
  *  10. 移调：+12 半音基频升到 440Hz±10%、-12 半音降到 110Hz±10%（零交叉测频）
  *  11. 移调：参数连续切换 → 无 NaN/Inf、无削波、相邻采样差值受限
  *  12. 移调：单次 0 → +12 切换无爆音；湿声延迟落在 [D/2, 1.5D]；两个实例互不影响
+ *  13. 箱琴：拨弦后约 53 ms 出现 220±5 音分的木琴音；干湿比 = 0 时干声零附加延迟；输出 = 0 时静音
+ *  14. 箱琴：移调 ±12 半音改变基频；衰减改变余音长度；音色改变分音配比
+ *  15. 箱琴：两个独立实例输出完全一致（状态不共享）
  *
  * 附加（不计入上面 12 项）：worklet 消息协议的越界保护与电平上报自检。
  */
@@ -44,7 +47,8 @@ const PITCH_RATE = 48000;
 const PITCH_SAMPLES = 48000;
 const ALL_KINDS = [
     'fuzz', 'overdrive', 'wah', 'compressor', 'reverb', 'delay',
-    'amp_clean', 'amp_chime', 'amp_crunch', 'amp_modern', 'pitch'
+    'amp_clean', 'amp_chime', 'amp_crunch', 'amp_modern', 'pitch',
+    'marimba'
 ];
 
 // ---------------------------------------------------------------------------
@@ -112,6 +116,58 @@ function renderReference (kind, parameter, value) {
     }
     effect.processBlock(buffer[0], buffer[1], RENDER_SAMPLES);
     return buffer;
+}
+
+// ---------------------------------------------------------------------------
+// 箱琴专用工具（规格 docs/marimba_effect_spec.md）
+// ---------------------------------------------------------------------------
+
+/**
+ * 箱琴渲染：按 512 采样分块推进。
+ * parameters 依次为移调 / 衰减 / 音色 / 触发 / 干湿比 / 输出。
+ */
+function renderMarimba (parameters, rate, samples, inputAt) {
+    const effect = new BuiltinEffect('marimba', rate);
+    for (let i = 0; i < parameters.length; ++i)
+        effect.setParameterValue(i, parameters[i]);
+    effect.prepareToPlay(rate, 512);
+    const buffer = stereoBuffer(samples);
+    for (let i = 0; i < samples; ++i) {
+        buffer[0][i] = inputAt(i);
+        buffer[1][i] = inputAt(i);
+    }
+    for (let start = 0; start < samples; start += 512) {
+        const count = Math.min(512, samples - start);
+        effect.processBlock(buffer[0].subarray(start, start + count),
+            buffer[1].subarray(start, start + count), count);
+    }
+    return buffer;
+}
+
+/** 拨弦输入：5 ms 起音斜坡 + 持续正弦。 */
+function pluckInput (rate, frequency, amplitude) {
+    return i => {
+        const t = i / rate;
+        const attack = t < 0.005 ? t / 0.005 : 1;
+        return amplitude * attack * Math.sin(2 * Math.PI * frequency * t);
+    };
+}
+
+/** 首个非零采样下标（找不到返回 -1）。 */
+function firstNonZero (buffer, channel) {
+    for (let i = 0; i < buffer[channel].length; ++i) {
+        if (Math.abs(buffer[channel][i]) > 1e-6)
+            return i;
+    }
+    return -1;
+}
+
+/** 区间内的 RMS。 */
+function rms (buffer, channel, start, count) {
+    let sum = 0;
+    for (let i = start; i < start + count; ++i)
+        sum += buffer[channel][i] * buffer[channel][i];
+    return Math.sqrt(sum / count);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +243,7 @@ function testCase (name, fn) {
     cases.push({ name, fn });
 }
 
-testCase('1. 静音输入 → 输出静音（11 种效果器 × 3 个采样率）', () => {
+testCase('1. 静音输入 → 输出静音（12 种效果器 × 3 个采样率）', () => {
     for (const rate of [44100, 48000, 96000]) {
         for (const kind of ALL_KINDS) {
             const effect = new BuiltinEffect(kind, rate);
@@ -474,10 +530,78 @@ testCase('12. 移调：单次 0 → +12 切换无爆音 / 湿声延迟落在 [D/
         '移调两个独立实例输出应完全一致（不共享状态）');
 });
 
+testCase('13. 箱琴：拨弦后约 53 ms 出现 220±5 音分的木琴音 / mix=0 直通 / level=0 静音', () => {
+    const rate = 48000;
+    const samples = 48000;
+    const input = pluckInput(rate, 220, 0.3);
+    const wet = renderMarimba([0, 1.2, 0.6, 0.5, 1, 0.8], rate, samples, input);
+    const start = firstNonZero(wet, 0);
+    assertTrue(start >= 0, '箱琴：拨弦后应发声');
+    const startMs = start / rate * 1000;
+    assertTrue(startMs >= 45 && startMs <= 90,
+        `箱琴：音符应落在起音后约 53 ms（捕获窗口），实际 ${startMs.toFixed(1)} ms`);
+    const hz = estimatePitchFrequency(wet, 0, start + Math.floor(rate * 0.1), 8192);
+    const cents = Math.abs(1200 * Math.log2(hz / 220));
+    assertTrue(cents < 5,
+        `箱琴：输出基频应接近 220 Hz（±5 音分），实际 ${hz.toFixed(2)} Hz（${cents.toFixed(2)} 音分）`);
+
+    // mix = 0 → 输出与输入完全一致（干声零附加延迟；输出参数同样作用于干声）。
+    const dry = renderMarimba([0, 1.2, 0.6, 0.5, 0, 0.8], rate, samples, input);
+    let maxError = 0;
+    for (let i = 0; i < samples; ++i)
+        maxError = Math.max(maxError, Math.abs(dry[0][i] - input(i) * 0.8));
+    assertTrue(maxError < 1e-9,
+        `箱琴：干湿比 = 0 时输出应为输入 × 输出增益，实际最大偏差 ${maxError}`);
+
+    // level = 0 → 完全静音。
+    const muted = renderMarimba([0, 1.2, 0.6, 0.5, 1, 0], rate, samples, input);
+    assertEqual(magnitude(muted, 0, 0, samples), 0, '箱琴：输出 = 0 时应完全静音');
+});
+
+testCase('14. 箱琴：移调改变音高 / 衰减改变余音长度 / 音色改变波形', () => {
+    const rate = 48000;
+    const samples = 48000;
+    const input = pluckInput(rate, 220, 0.3);
+    const base = renderMarimba([0, 1.2, 0.6, 0.5, 1, 0.8], rate, samples, input);
+    const start = firstNonZero(base, 0);
+
+    // 移调 +12 半音 → 基频翻倍；-12 半音 → 减半。
+    const up = renderMarimba([12, 1.2, 0.6, 0.5, 1, 0.8], rate, samples, input);
+    const upHz = estimatePitchFrequency(up, 0, start + Math.floor(rate * 0.1), 8192);
+    assertNear(upHz, 440, 440 * 0.05, '箱琴：移调 +12 半音后的基频');
+    const down = renderMarimba([-12, 1.2, 0.6, 0.5, 1, 0.8], rate, samples, input);
+    const downHz = estimatePitchFrequency(down, 0, start + Math.floor(rate * 0.1), 8192);
+    assertNear(downHz, 110, 110 * 0.05, '箱琴：移调 -12 半音后的基频');
+
+    // 衰减：0.2 s 与 4 s 在 1.2 s 处的余音差异明显。
+    const longSamples = 120000;
+    const short = renderMarimba([0, 0.2, 0.6, 0.5, 1, 0.8], rate, longSamples, input);
+    const long = renderMarimba([0, 4, 0.6, 0.5, 1, 0.8], rate, longSamples, input);
+    const tailStart = Math.floor(rate * 1.2);
+    const shortRms = rms(short, 0, tailStart, 8192);
+    const longRms = rms(long, 0, tailStart, 8192);
+    assertTrue(longRms > shortRms * 4,
+        `箱琴：衰减 4 s 的余音应明显长于 0.2 s（${longRms.toFixed(5)} vs ${shortRms.toFixed(5)}）`);
+
+    // 音色：改变分音配比，输出应不同。
+    const dark = renderMarimba([0, 1.2, 0, 0.5, 1, 0.8], rate, samples, input);
+    assertTrue(difference(base, dark) > 0.01,
+        '箱琴：音色参数应能改变输出');
+});
+
+testCase('15. 箱琴：两个独立实例输出完全一致（状态不共享）', () => {
+    const rate = 48000;
+    const samples = 48000;
+    const input = pluckInput(rate, 220, 0.3);
+    const first = renderMarimba([0, 1.2, 0.6, 0.5, 1, 0.8], rate, samples, input);
+    const second = renderMarimba([0, 1.2, 0.6, 0.5, 1, 0.8], rate, samples, input);
+    assertEqual(difference(first, second), 0,
+        '箱琴：两个独立实例输出应完全一致（不共享状态）');
+});
+
 // ---------------------------------------------------------------------------
 // 附加（不计入上面 8 项）：worklet 消息协议自检
 // ---------------------------------------------------------------------------
-
 function protocolChecks () {
     const processor = new GuitarbookEffectsProcessor();
     const sent = [];

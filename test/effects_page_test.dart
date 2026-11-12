@@ -55,6 +55,7 @@ class FakeEffects extends EffectsBackend {
           'amp_crunch': '英式摇滚箱头',
           'amp_modern': '现代高增益箱头',
           'pitch': '移调 Pitch',
+          'marimba': '箱琴 Marimba',
         }[kind],
         'kind': kind,
         'bypass': false,
@@ -130,6 +131,51 @@ class FakeEffects extends EffectsBackend {
                   'min': 0.0,
                   'max': 1.0,
                   'value': 1.0,
+                  'unit': '',
+                },
+              ]
+            : kind == 'marimba'
+            ? [
+                {
+                  'name': '移调',
+                  'min': -12.0,
+                  'max': 12.0,
+                  'value': 0.0,
+                  'unit': '半音',
+                },
+                {
+                  'name': '衰减',
+                  'min': 0.2,
+                  'max': 4.0,
+                  'value': 1.2,
+                  'unit': 's',
+                },
+                {
+                  'name': '音色',
+                  'min': 0.0,
+                  'max': 1.0,
+                  'value': 0.6,
+                  'unit': '',
+                },
+                {
+                  'name': '触发',
+                  'min': 0.0,
+                  'max': 1.0,
+                  'value': 0.5,
+                  'unit': '',
+                },
+                {
+                  'name': '干湿比',
+                  'min': 0.0,
+                  'max': 1.0,
+                  'value': 1.0,
+                  'unit': '',
+                },
+                {
+                  'name': '输出',
+                  'min': 0.0,
+                  'max': 1.0,
+                  'value': 0.8,
                   'unit': '',
                 },
               ]
@@ -823,6 +869,53 @@ void main() {
     expect(backend.plugins[0]['parameters'][1]['value'], 1.0);
     expect(backend.plugins[0]['parameters'][2]['value'], 1.0);
     expect(find.text('PITCH'), findsOneWidget);
+    expect(find.textContaining('半音'), findsWidgets);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('箱琴效果可添加，六个旋钮独立调参并显示单位', (tester) async {
+    tester.view.physicalSize = const Size(1440, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final backend = FakeEffects();
+    await tester.pumpWidget(MaterialApp(home: EffectsPage(backend: backend)));
+    await tester.pump();
+    final button = find.widgetWithText(OutlinedButton, '箱琴 Marimba');
+    await tester.scrollUntilVisible(
+      button,
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(backend.plugins.map((p) => p['kind']), ['marimba']);
+    expect(backend.plugins[0]['name'], '箱琴 Marimba');
+    final transpose = find.byKey(const ValueKey('0-marimba-0'));
+    await tester.ensureVisible(transpose);
+    await tester.pumpAndSettle();
+    for (var index = 1; index < 6; ++index) {
+      expect(find.byKey(ValueKey('0-marimba-$index')), findsOneWidget);
+    }
+    await tester.drag(transpose, const Offset(0, -60));
+    await tester.pump(const Duration(milliseconds: 100));
+    final value = backend.plugins[0]['parameters'][0]['value'] as double;
+    expect(value, greaterThan(0));
+    expect(value, lessThanOrEqualTo(12));
+    expect(backend.plugins[0]['parameters'][1]['value'], 1.2);
+    expect(backend.plugins[0]['parameters'][2]['value'], 0.6);
+    expect(backend.plugins[0]['parameters'][3]['value'], 0.5);
+    expect(backend.plugins[0]['parameters'][4]['value'], 1.0);
+    expect(backend.plugins[0]['parameters'][5]['value'], 0.8);
+    expect(find.text('MARIMBA'), findsOneWidget);
     expect(find.textContaining('半音'), findsWidgets);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());

@@ -10,7 +10,7 @@ inline void testBuiltinDsp() {
     juce::MidiBuffer midi;
     // Check sample-rate changes, parameter extremes, silence and finite output.
     for (auto rate : {44100.0, 48000.0, 96000.0}) {
-        for (const auto* kind : {"wah", "fuzz", "compressor", "reverb", "overdrive", "delay", "pitch", "amp_clean", "amp_chime", "amp_crunch", "amp_modern"}) {
+        for (const auto* kind : {"wah", "fuzz", "compressor", "reverb", "overdrive", "delay", "pitch", "marimba", "amp_clean", "amp_chime", "amp_crunch", "amp_modern"}) {
             BuiltinEffect effect(kind);
             effect.prepareToPlay(rate, 512);
             juce::AudioBuffer<float> audio(2, 512);
@@ -324,6 +324,138 @@ inline void testBuiltinDsp() {
         const auto shifted = renderPitch(12, 8192);
         requireZh(difference(reference, shifted) > 1, "移调参数没有生效");
         requireZh(difference(reference, renderPitch(0, 8192)) == 0, "移调效果器实例间共享状态");
+    }
+
+    // ===========================================================================
+    // 箱琴 Marimba：按规格 docs/marimba_effect_spec.md §8 验证
+    // ===========================================================================
+    // 参数表：6 个参数，名称 / 量程 / 默认值 / 顺序必须与规格 §2 一致。
+    {
+        BuiltinEffect marimba("marimba");
+        const auto& parameters = marimba.getParameters();
+        requireZh(parameters.size() == 6, "箱琴参数数量与规格不一致");
+        const float minimums[6] = {-12.0f, 0.2f, 0.0f, 0.0f, 0.0f, 0.0f};
+        const float maximums[6] = {12.0f, 4.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+        const float initials[6] = {0.0f, 1.2f, 0.6f, 0.5f, 1.0f, 0.8f};
+        for (int i = 0; i < 6; ++i) {
+            auto* parameter = parameters[i];
+            requireZh(std::abs(parameter->range.start - minimums[i]) < 1e-6f
+                && std::abs(parameter->range.end - maximums[i]) < 1e-6f
+                && std::abs(parameter->get() - initials[i]) < 1e-6f,
+                "箱琴参数量程或默认值与规格不一致");
+        }
+    }
+    // 箱琴测试信号：0.3 幅度 220 Hz 正弦 + 20 ms 线性起音（避免突变引入宽带噪声）。
+    const auto marimbaSignal = [](juce::AudioBuffer<float>& audio, int samples) {
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < samples; ++i) {
+                const double t = i / 48000.0;
+                const double envelope = t < 0.02 ? t / 0.02 : 1.0;
+                audio.setSample(ch, i, static_cast<float>(0.3 * envelope
+                    * std::sin(t * 2 * juce::MathConstants<double>::pi * 220.0)));
+            }
+    };
+    const auto renderMarimba = [&midi, &marimbaSignal](int samples, const std::vector<std::pair<int, float>>& overrides) {
+        BuiltinEffect marimba("marimba");
+        for (const auto& override : overrides) marimba.setParameterValue(override.first, override.second);
+        marimba.prepareToPlay(48000, 512);
+        juce::AudioBuffer<float> audio(2, samples);
+        marimbaSignal(audio, samples);
+        marimba.processBlock(audio, midi);
+        return audio;
+    };
+    // 音符起点：第一个非零采样（湿声在捕获窗口结束前必须保持静音）。
+    const auto firstNoteSample = [](const juce::AudioBuffer<float>& audio) {
+        for (int i = 0; i < audio.getNumSamples(); ++i)
+            if (std::abs(audio.getSample(0, i)) > 0.0f) return i;
+        return -1;
+    };
+    // 余音末端：最后一个幅度超过 1e-3 的采样。
+    const auto tailSample = [](const juce::AudioBuffer<float>& audio) {
+        int last = -1;
+        for (int i = 0; i < audio.getNumSamples(); ++i)
+            if (std::abs(audio.getSample(0, i)) > 1e-3f) last = i;
+        return last;
+    };
+    // 音分偏差：1200 * log2(f / 参考频率)。
+    const auto centsFrom = [](double frequency, double reference) {
+        return 1200.0 * std::log2(frequency / reference);
+    };
+    // 静音输入必须保持静音。
+    {
+        BuiltinEffect marimba("marimba");
+        marimba.prepareToPlay(48000, 512);
+        juce::AudioBuffer<float> audio(2, 512);
+        audio.clear();
+        marimba.processBlock(audio, midi);
+        requireZh(audio.getMagnitude(0, 512) == 0 && audio.getMagnitude(1, 512) == 0,
+            "箱琴静音输入未保持静音");
+    }
+    // 干湿比为 0 时只输出干声（输出旋钮取 1，默认 0.8 会整体缩放干声）。
+    {
+        BuiltinEffect marimba("marimba");
+        marimba.setParameterValue(4, 0);
+        marimba.setParameterValue(5, 1);
+        marimba.prepareToPlay(48000, 512);
+        juce::AudioBuffer<float> audio(2, 4096);
+        marimbaSignal(audio, 4096);
+        const juce::AudioBuffer<float> source(audio);
+        marimba.processBlock(audio, midi);
+        double maxDifference = 0;
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < audio.getNumSamples(); ++i) {
+                const double delta = std::abs(static_cast<double>(audio.getSample(ch, i)) - source.getSample(ch, i));
+                if (delta > maxDifference) maxDifference = delta;
+            }
+        requireZh(maxDifference < 1e-6, "箱琴干湿比为 0 时未保持干声直通");
+    }
+    // 输出旋钮为 0 时必须静音。
+    {
+        BuiltinEffect muted("marimba");
+        muted.setParameterValue(5, 0);
+        muted.prepareToPlay(48000, 512);
+        juce::AudioBuffer<float> audio(2, 8192);
+        marimbaSignal(audio, 8192);
+        muted.processBlock(audio, midi);
+        requireZh(audio.getMagnitude(0, audio.getNumSamples()) == 0, "箱琴输出旋钮为 0 时未静音");
+    }
+    // 220 Hz 输入：约 53 ms（捕获窗口）之后出现音符，音高接近 220 Hz（±5 音分）。
+    {
+        const auto audio = renderMarimba(16384, {{4, 1.0f}, {5, 1.0f}});
+        const int note = firstNoteSample(audio);
+        // 捕获窗口 = 16 * maxLag 采样（抽取 4 倍 × 捕获 4 * maxLag），48 kHz 下约 53.3 ms。
+        requireZh(note > 2400 && note < 3600, "箱琴音符起点不在捕获窗口之后");
+        requireZh(note > 0 && audio.getMagnitude(0, 0, note) == 0, "箱琴捕获窗口内不应出现输出");
+        const auto period = estimatePeriod(audio, note + 512, 8192, 150, 300);
+        const double frequency = 48000.0 / period.first;
+        requireZh(period.second > 0.5, "箱琴输出周期性太弱");
+        requireZh(std::abs(centsFrom(frequency, 220.0)) <= 5.0, "箱琴音高偏离 220 Hz 超过 5 音分");
+    }
+    // 移调参数改变输出音高（+12 半音 = 高八度）。
+    {
+        const auto plain = renderMarimba(16384, {{5, 1.0f}});
+        const auto up = renderMarimba(16384, {{0, 12.0f}, {5, 1.0f}});
+        const int plainNote = firstNoteSample(plain);
+        const int upNote = firstNoteSample(up);
+        const auto plainPeriod = estimatePeriod(plain, plainNote + 512, 8192, 150, 300);
+        const auto upPeriod = estimatePeriod(up, upNote + 512, 8192, 60, 160);
+        const double ratio = plainPeriod.first / upPeriod.first;
+        requireZh(ratio > 1.9 && ratio < 2.1, "箱琴移调 12 半音后音高未升高一倍");
+    }
+    // 衰减参数改变余音长度（衰减越大余音越长）。
+    {
+        const auto quick = renderMarimba(120000, {{1, 0.4f}, {5, 1.0f}});
+        const auto longTail = renderMarimba(120000, {{1, 2.4f}, {5, 1.0f}});
+        const int quickEnd = tailSample(quick);
+        const int longEnd = tailSample(longTail);
+        requireZh(quickEnd > 0 && longEnd > 0, "箱琴余音缺失");
+        requireZh(longEnd > quickEnd * 3, "箱琴衰减参数未改变余音长度");
+    }
+    // 多实例隔离：两个实例状态互不影响。
+    {
+        const auto reference = renderMarimba(8192, {{5, 1.0f}});
+        requireZh(difference(reference, renderMarimba(8192, {{5, 1.0f}})) == 0, "箱琴效果器实例间共享状态");
+        requireZh(difference(reference, renderMarimba(8192, {{0, 7.0f}, {5, 1.0f}})) > 1, "箱琴参数没有生效");
     }
 
     // An independent instance must not inherit another delay's tail.

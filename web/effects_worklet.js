@@ -2,10 +2,11 @@
  * guitarbook · 电脑端浏览器版效果器 DSP 内核（AudioWorklet）
  *
  * 1:1 移植自 native/effects_host/builtin_effect.h（JUCE C++ 内置效果器）：
- *   fuzz / overdrive / wah / compressor / reverb / delay / pitch /
+ *   fuzz / overdrive / wah / compressor / reverb / delay / pitch / marimba /
  *   amp_clean / amp_chime / amp_crunch / amp_modern
  *
  * 移调（pitch）另有一份两端共用的权威规格：docs/pitch_shifter_spec.md，
+ * 箱琴（marimba）另有一份：docs/marimba_effect_spec.md，
  * C++ 与 JS 必须按同一份规格实现（同一输入 → 浮点误差 ≤ 1e-4）。
  *
  * 约束：
@@ -414,6 +415,309 @@
     }
 
     // ---------------------------------------------------------------------------
+    // 4.5 箱琴 Marimba：起音检测 + YIN 音高检测 + 模态加法合成
+    //     权威规格：docs/marimba_effect_spec.md（与 C++ 内核共用同一份）
+    // ---------------------------------------------------------------------------
+
+    /** 分音数量。 */
+    const MARIMBA_PARTIAL_COUNT = 5;
+    /** 同时发声的声部数量。 */
+    const MARIMBA_VOICE_COUNT = 4;
+    /** 分音频率比。 */
+    const MARIMBA_PARTIAL_RATIO = [1.0, 2.0, 3.0, 4.0, 6.0];
+    /** 分音基值（音色 = 0 时的幅度）。 */
+    const MARIMBA_PARTIAL_BASE = [1.0, 0.06, 0.03, 0.05, 0.0];
+    /** 分音音色增量（音色 = 1 时额外叠加的幅度）。 */
+    const MARIMBA_PARTIAL_DELTA = [0.0, 0.10, 0.12, 0.30, 0.07];
+    /** 分音衰减系数（相对基频时间常数）。 */
+    const MARIMBA_PARTIAL_DECAY_FACTOR = [1.0, 0.55, 0.42, 0.30, 0.22];
+    /** 衰减参数（−60 dB 时间）→ 基频时间常数的换算系数 1 / ln(1000)。 */
+    const MARIMBA_DECAY_TAU_BASE = 1.0 / Math.log(1000.0);
+    /** 单声部分音整体增益（槌击噪声不乘该系数）。 */
+    const MARIMBA_VOICE_GAIN = 0.20;
+    /** 槌击噪声初始增益（clickAmp 初值 = 该值 × 力度）。 */
+    const MARIMBA_CLICK_GAIN = 0.08;
+    /** 声部结束阈值。 */
+    const MARIMBA_VOICE_END_LEVEL = 1e-4;
+    /** 捕获窗口 RMS 下限。 */
+    const MARIMBA_ENERGY_FLOOR = 0.002;
+    /** YIN 绝对阈值。 */
+    const MARIMBA_YIN_THRESHOLD = 0.15;
+    /** 起音绝对阈值的基准值。 */
+    const MARIMBA_ONSET_BASE = 0.05;
+    /** 起音判定：短时能量需超过长时能量的倍数。 */
+    const MARIMBA_ENERGY_RATIO = 1.6;
+    /** 重新武装条件：短时能量回落到长时能量的该倍数以内后，才允许检测下一次起音。 */
+    const MARIMBA_REARM_RATIO = 1.02;
+    /** 力度换算参考幅度。 */
+    const MARIMBA_VELOCITY_REFERENCE = 0.30;
+    /** 力度上下限。 */
+    const MARIMBA_VELOCITY_FLOOR = 0.25;
+    const MARIMBA_VELOCITY_CEILING = 1.0;
+    /** 抽取倍数。 */
+    const MARIMBA_DECIMATION = 4;
+    /** 可检测的最低 / 最高频率（Hz）。 */
+    const MARIMBA_MIN_FREQUENCY = 75.0;
+    const MARIMBA_MAX_FREQUENCY = 1100.0;
+
+    class MarimbaSynth {
+        constructor (rate) {
+            this.rate = rate;
+            this.analysisRate = rate / MARIMBA_DECIMATION;
+            this.maxLag = Math.max(3, Math.floor(this.analysisRate / MARIMBA_MIN_FREQUENCY));
+            this.lagMin = Math.max(2, Math.floor(this.analysisRate / MARIMBA_MAX_FREQUENCY));
+            this.captureLength = 4 * this.maxLag;
+            this.capture = new Float64Array(this.captureLength);
+            this.difference = new Float64Array(this.maxLag + 1);
+            this.decimator = new Float64Array(4);
+            this.decayCoef = new Float64Array(MARIMBA_PARTIAL_COUNT);
+            this.voices = [];
+            for (let i = 0; i < MARIMBA_VOICE_COUNT; ++i) {
+                this.voices.push({
+                    active: false,
+                    age: 0,
+                    phase: new Float64Array(MARIMBA_PARTIAL_COUNT),
+                    step: new Float64Array(MARIMBA_PARTIAL_COUNT),
+                    amp: new Float64Array(MARIMBA_PARTIAL_COUNT),
+                    clickAmp: 0,
+                    clickLp: 0
+                });
+            }
+            this.reset();
+        }
+
+        /** 复位全部状态（prepareToPlay 调用）。 */
+        reset () {
+            const rate = this.rate;
+            this.capture.fill(0);
+            this.difference.fill(0);
+            this.decimator.fill(0);
+            this.decimPhase = 0;
+            this.captureCount = 0;
+            this.capturing = false;
+            this.armed = true;
+            this.capturePeak = 0;
+            this.fastEnv = 0;
+            this.shortEnergy = 0;
+            this.longEnergy = 0;
+            this.refractorySamples = Math.floor(rate * 0.015);
+            // 初值取不应期长度：首次起音立即可触发（不应期只抑制连续重复触发）。
+            this.samplesSinceOnset = this.refractorySamples;
+            this.velocity = MARIMBA_VELOCITY_FLOOR;
+            this.noiseSeed = 22222 >>> 0;
+            this.nextAge = 0;
+            this.decimatorAlpha = 1 - Math.exp(-TWO_PI * 0.09);
+            this.fastRelease = Math.exp(-1.0 / (rate * 0.010));
+            this.shortAlpha = 1 - Math.exp(-1.0 / (rate * 0.006));
+            this.longAlpha = 1 - Math.exp(-1.0 / (rate * 0.060));
+            this.clickAlpha = 1 - Math.exp(-TWO_PI * 0.20);
+            this.clickDecay = Math.exp(-1.0 / (rate * 0.008));
+            this.lastDecay = -1;
+            this.updateDecay(1.2);
+            for (const voice of this.voices) {
+                voice.active = false;
+                voice.age = 0;
+                voice.phase.fill(0);
+                voice.step.fill(0);
+                voice.amp.fill(0);
+                voice.clickAmp = 0;
+                voice.clickLp = 0;
+            }
+        }
+
+        /** 衰减参数变化时重算逐采样衰减系数（已发声的声部立即采用新值）。 */
+        updateDecay (decay) {
+            if (Math.abs(decay - this.lastDecay) <= 1e-6)
+                return;
+            this.lastDecay = decay;
+            for (let p = 0; p < MARIMBA_PARTIAL_COUNT; ++p) {
+                const tau = decay * MARIMBA_DECAY_TAU_BASE * MARIMBA_PARTIAL_DECAY_FACTOR[p];
+                this.decayCoef[p] = Math.exp(-1.0 / (this.rate * tau));
+            }
+        }
+
+        /** xorshift32 伪随机（与 C++ 端逐位一致），返回 [-1, 1)。 */
+        nextNoise () {
+            let state = this.noiseSeed;
+            state ^= state << 13;
+            state >>>= 0;
+            state ^= state >>> 17;
+            state ^= state << 5;
+            state >>>= 0;
+            this.noiseSeed = state;
+            return ((state & 0xFFFFFF) / 8388607.5) - 1.0;
+        }
+
+        /** 触发一个木琴声部（没有空闲声部时抢占最早触发的一个）。 */
+        triggerVoice (frequency, velocity) {
+            let voice = null;
+            for (const candidate of this.voices) {
+                if (!candidate.active) {
+                    voice = candidate;
+                    break;
+                }
+            }
+            if (!voice) {
+                voice = this.voices[0];
+                for (const candidate of this.voices)
+                    if (candidate.age < voice.age)
+                        voice = candidate;
+            }
+            voice.active = true;
+            voice.age = this.nextAge++;
+            voice.clickAmp = MARIMBA_CLICK_GAIN * velocity;
+            voice.clickLp = 0;
+            for (let p = 0; p < MARIMBA_PARTIAL_COUNT; ++p) {
+                voice.phase[p] = 0;
+                voice.step[p] = TWO_PI * frequency * MARIMBA_PARTIAL_RATIO[p] / this.rate;
+                voice.amp[p] = 1.0;
+            }
+        }
+
+        /**
+         * YIN 音高检测（移植自 lib/features/tuner/pitch_detector.dart，规格 §5）。
+         * @returns {number} 频率（Hz），检测失败返回 0。
+         */
+        detectPitch (length) {
+            const buf = this.capture;
+            const maxLag = this.maxLag;
+            if (maxLag < 3 || length <= maxLag)
+                return 0;
+            const window = length - maxLag;
+            let mean = 0;
+            for (let i = 0; i < length; ++i)
+                mean += buf[i];
+            mean /= length;
+            let energy = 0;
+            for (let i = 0; i < length; ++i) {
+                const delta = buf[i] - mean;
+                energy += delta * delta;
+            }
+            if (Math.sqrt(energy / length) < MARIMBA_ENERGY_FLOOR)
+                return 0;
+            const difference = this.difference;
+            let cumulative = 0;
+            difference[0] = 1;
+            for (let lag = 1; lag <= maxLag; ++lag) {
+                let sum = 0;
+                for (let i = 0; i < window; ++i) {
+                    const delta = buf[i] - buf[i + lag];
+                    sum += delta * delta;
+                }
+                cumulative += sum;
+                difference[lag] = cumulative === 0 ? 1 : sum * lag / cumulative;
+            }
+            let lag = this.lagMin;
+            while (lag < maxLag - 1) {
+                if (difference[lag] >= MARIMBA_YIN_THRESHOLD) {
+                    ++lag;
+                    continue;
+                }
+                while (lag + 1 < maxLag && difference[lag + 1] < difference[lag])
+                    ++lag;
+                if (lag >= maxLag)
+                    return 0;
+                const left = difference[lag - 1];
+                const center = difference[lag];
+                const right = difference[lag + 1];
+                const denominator = left - 2 * center + right;
+                const offset = denominator === 0 ? 0 : 0.5 * (left - right) / denominator;
+                return this.analysisRate / (lag + offset);
+            }
+            return 0;
+        }
+
+        /**
+         * 处理一个采样点，返回木琴湿声（未做干湿混合与输出增益）。
+         * @param {number} leftSample 左声道输入
+         * @param {number} rightSample 右声道输入
+         * @param {Float64Array} values 逐采样的参数平滑值
+         */
+        processSample (leftSample, rightSample, values) {
+            this.updateDecay(values[1]);
+            const x = 0.5 * (leftSample + rightSample);
+
+            // 步骤 A：快包络 + 短 / 长时能量与起音检测。
+            const amplitude = Math.abs(x);
+            this.fastEnv = Math.max(amplitude, this.fastEnv * this.fastRelease);
+            const power = amplitude * amplitude;
+            this.shortEnergy += this.shortAlpha * (power - this.shortEnergy);
+            this.longEnergy += this.longAlpha * (power - this.longEnergy);
+            const threshold = MARIMBA_ONSET_BASE * Math.pow(0.1, values[3]);
+            // 重新武装：一次起音触发后，必须等能量回落到长时能量附近才允许下一次起音，
+            // 避免持续音被反复触发成连奏。
+            if (!this.armed && this.shortEnergy <= this.longEnergy * MARIMBA_REARM_RATIO)
+                this.armed = true;
+            // 捕获进行中忽略新的起音：保证音符起点固定在「首个起音 + 捕获窗口」，
+            // 不会因重复触发而被不断推迟。
+            if (this.armed
+                && !this.capturing
+                && this.fastEnv > threshold
+                && this.shortEnergy > this.longEnergy * MARIMBA_ENERGY_RATIO
+                && this.samplesSinceOnset >= this.refractorySamples) {
+                this.samplesSinceOnset = 0;
+                this.armed = false;
+                this.capturing = true;
+                this.captureCount = 0;
+                this.capturePeak = 0;
+            }
+            this.samplesSinceOnset += 1;
+            if (this.capturing && amplitude > this.capturePeak)
+                this.capturePeak = amplitude;
+
+            // 步骤 B：4 倍抽取（4 级单极点低通级联），每 4 个采样点落一次抽取值。
+            const decimator = this.decimator;
+            decimator[0] += this.decimatorAlpha * (x - decimator[0]);
+            decimator[1] += this.decimatorAlpha * (decimator[0] - decimator[1]);
+            decimator[2] += this.decimatorAlpha * (decimator[1] - decimator[2]);
+            decimator[3] += this.decimatorAlpha * (decimator[2] - decimator[3]);
+            this.decimPhase += 1;
+            if (this.decimPhase >= MARIMBA_DECIMATION) {
+                this.decimPhase = 0;
+                if (this.capturing) {
+                    this.capture[this.captureCount] = decimator[3];
+                    this.captureCount += 1;
+                    if (this.captureCount >= this.captureLength) {
+                        this.capturing = false;
+                        const frequency = this.detectPitch(this.captureLength);
+                        if (frequency > 0) {
+                            // 力度取捕获窗口内的峰值幅度（比起音瞬间的包络更稳）。
+                            this.velocity = jlimit(MARIMBA_VELOCITY_FLOOR, MARIMBA_VELOCITY_CEILING,
+                                this.capturePeak / MARIMBA_VELOCITY_REFERENCE);
+                            this.triggerVoice(frequency * Math.pow(2.0, values[0] / 12.0), this.velocity);
+                        }
+                    }
+                }
+            }
+
+            // 步骤 C：声部合成（模态加法合成 + 槌击噪声）。
+            const noise = this.nextNoise();
+            const tone = values[2];
+            let wet = 0;
+            for (const voice of this.voices) {
+                if (!voice.active)
+                    continue;
+                let sum = 0;
+                for (let p = 0; p < MARIMBA_PARTIAL_COUNT; ++p) {
+                    voice.phase[p] += voice.step[p];
+                    if (voice.phase[p] >= TWO_PI)
+                        voice.phase[p] -= TWO_PI;
+                    sum += voice.amp[p] * (MARIMBA_PARTIAL_BASE[p] + MARIMBA_PARTIAL_DELTA[p] * tone)
+                        * Math.sin(voice.phase[p]);
+                    voice.amp[p] *= this.decayCoef[p];
+                }
+                voice.clickLp += this.clickAlpha * (noise - voice.clickLp);
+                const click = (noise - voice.clickLp) * voice.clickAmp;
+                voice.clickAmp *= this.clickDecay;
+                wet += sum * MARIMBA_VOICE_GAIN + click;
+                if (voice.amp[0] < MARIMBA_VOICE_END_LEVEL && voice.clickAmp < MARIMBA_VOICE_END_LEVEL)
+                    voice.active = false;
+            }
+            return wet;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
     // 5. 效果器参数表（顺序 = describeParameters() 顺序）
     // ---------------------------------------------------------------------------
 
@@ -524,6 +828,21 @@
                         { id: 'level', name: '输出', min: 0, max: 1, initial: 1, unit: '' }
                     ]
                 };
+            case 'marimba':
+                // 箱琴：参数顺序 = 参数下标，两端（C++ / JS）必须一致（规格 docs/marimba_effect_spec.md §2）。
+                return {
+                    kind,
+                    title: '箱琴 Marimba',
+                    model: -1,
+                    parameters: [
+                        { id: 'transpose', name: '移调', min: -12, max: 12, initial: 0, unit: '半音' },
+                        { id: 'decay', name: '衰减', min: 0.2, max: 4, initial: 1.2, unit: 's' },
+                        { id: 'tone', name: '音色', min: 0, max: 1, initial: 0.6, unit: '' },
+                        { id: 'sensitivity', name: '触发', min: 0, max: 1, initial: 0.5, unit: '' },
+                        { id: 'mix', name: '干湿比', min: 0, max: 1, initial: 1, unit: '' },
+                        { id: 'level', name: '输出', min: 0, max: 1, initial: 0.8, unit: '' }
+                    ]
+                };
             default:
                 return null;
         }
@@ -533,7 +852,7 @@
     const BUILTIN_KINDS = [
         'fuzz', 'overdrive', 'wah', 'compressor', 'reverb', 'delay',
         'amp_clean', 'amp_chime', 'amp_crunch', 'amp_modern',
-        'pitch'
+        'pitch', 'marimba'
     ];
 
     // ---------------------------------------------------------------------------
@@ -575,6 +894,7 @@
             this.delayBuffer = [new Float32Array(0), new Float32Array(0)];
             this.reverb = null;
             this.pitch = null;
+            this.marimba = null;
 
             this.prepareToPlay(rate || 48000, 512);
         }
@@ -628,6 +948,10 @@
             if (this.kind === 'pitch') {
                 // 移调状态（环形缓冲 / 读头 / 淡变 / 低通）按规格 §2 全部复位。
                 this.pitch = new PitchShifter(rate);
+            }
+            if (this.kind === 'marimba') {
+                // 箱琴状态（捕获缓冲 / 抽取滤波器 / 包络 / 声部 / 噪声种子）全部复位。
+                this.marimba = new MarimbaSynth(rate);
             }
         }
 
@@ -846,6 +1170,21 @@
                     }
                     pitch.head[0] = pitch.mod(pitch.head[0] + ratio, length);
                     pitch.head[1] = pitch.mod(pitch.head[1] + ratio, length);
+                }
+                return;
+            }
+
+            if (this.kind === 'marimba') {
+                // ---- 箱琴 Marimba（起音检测 + YIN 音高检测 + 模态加法合成，规格 §4）----
+                const marimba = this.marimba;
+                for (let sample = 0; sample < samples; ++sample) {
+                    this.fillValues(values);
+                    const wet = marimba.processSample(left[sample], right[sample], values);
+                    const wetGain = values[4];
+                    const level = values[5];
+                    const wetValue = wet * wetGain;
+                    left[sample] = (left[sample] * (1.0 - wetGain) + wetValue) * level;
+                    right[sample] = (right[sample] * (1.0 - wetGain) + wetValue) * level;
                 }
                 return;
             }

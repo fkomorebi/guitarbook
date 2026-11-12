@@ -724,6 +724,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
                   ('amp_crunch', '英式摇滚箱头'),
                   ('amp_modern', '现代高增益箱头'),
                   ('pitch', '移调'),
+                  ('marimba', '箱琴 Marimba'),
                 ])
                   OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
@@ -1114,6 +1115,7 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
       'reverb' => Color(dark ? 0xFFCAB8EF : 0xFF71529C),
       'overdrive' => Color(dark ? 0xFFA4D69A : 0xFF326B31),
       'delay' => Color(dark ? 0xFF9BCCED : 0xFF356E91),
+      'marimba' => Color(dark ? 0xFFF0C08A : 0xFFB0652F),
       _ => Theme.of(context).colorScheme.primary,
     };
   }
