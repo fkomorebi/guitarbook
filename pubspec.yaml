@@ -68,6 +68,7 @@ flutter:
     - assets/fonts/OFL-NotoSerif.txt
     - assets/licenses/JUCE-LICENSE.md
     - assets/licenses/Oboe-LICENSE.txt
+    - assets/images/
 
   fonts:
     - family: ScoreSerif

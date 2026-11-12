@@ -47,3 +47,9 @@ app.*.map.json
 # 本地脚本产物与测量原始数据（不入库）
 /.tools/
 /.tmp/
+
+# Node 依赖（工具链，不入库）
+/tool/node_modules/
+
+# 安装包构建产物（不入库）
+/AppVersionVersion/

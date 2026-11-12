@@ -15,6 +15,21 @@ Flutter 製のギター練習・即興演奏ツール集です。ドラムマシ
 
 標準チューニング用チューナー（A4 = 440 Hz / 432 Hz の基準音を選択可能）、メトロノーム、スケール指板、初心者向けコードレッスンもあります。README の翻訳はアプリ画面の多言語対応を意味しません。
 
+## 視覚素材（2026-11-11）
+
+アプリ内のイラストとアプリアイコンは本機の ComfyUI ワークフローで生成しています。スタイルはフラットな編集イラストで統一し、紙のような粒子感、暖かなオフホワイト（#F7F5EF）の背景、深い青緑（#24695C）を主色、テラコッタ（#A34225）をアクセントに使います。図の中に文字は入れません。
+
+- ホーム画面の上部にはブランドバナーのイラストを追加し（添え書きは「每一次拨弦，都更进一步。」）、タイトルバーの左端に円形のアプリアイコンを表示します。幅の広い画面ではバナーと添え書きを左右に並べ、狭い画面では添え書きは画像の下に置きます。
+- ホームの 5 枚のツールカードにはテーマごとのイラストを使います（チューナー、メトロノーム、コードレッスン、スケール指板、即興ワークスペース）。
+- 即興ワークスペースのドラムマシン、バンド（コード進行）、エフェクトのパネルの見出し横にそれぞれのイラストを表示します。スマートベースのパネルはもとのアイコンのまま残しています。同じ画面に同じもののイラストが重ならないようにするためです。
+- 素材は WebP でアプリに同梱します（アプリアイコン 512×512、ツールイラスト 512×512、ホームバナー 1280×720、合計約 238 KB）。ネットワークには依存せず、新しい権限も発生しません。
+
+9 枚のイラストは `assets/images/` に `hero_home.webp`、`logo_app.webp`、および 7 枚の `tool_*.webp`（`tool_tuner`、`tool_metronome`、`tool_chords`、`tool_scales`、`tool_jam`、`tool_effects`、`tool_band`）として置いています。`lib/app/brand.dart` が素材のパス（`AppAssets`）と、描画する 2 つのウィジェット（円形ロゴの `BrandMark` と角丸のツール画像 `ToolIllustration`）を提供します。
+
+パイプラインは `tool/` で再現できます。`tool/comfy_generate.js` は本機の ComfyUI（既定は http://127.0.0.1:8188）を呼び出し、`tool/assets.json` のプロンプトで `.tools/raw/` にまとめて生成します。`tool/build_assets.js` がそれを切り抜いて `assets/images/*.webp` にリサイズし、`tool/build_icons.js` がアプリアイコンから各プラットフォームの起動アイコンを作ります。イラストの生成には本機で ComfyUI を起動しておく必要があり、元の大サイズ画像はリポジトリには同梱しません（`.tools/` は gitignore 済み）。スクリプトには Node と `sharp` が必要です。
+
+検証（2026-11-11）：`flutter analyze` はエラーなし、Flutter の全テスト 318 件が通過（新設の `test/brand_assets_test.dart` にはリソースの読み込みと 320×568 の狭幅・1440×900 の広幅のレイアウトを含みます）、Web Release のビルドが成功し 9 枚の素材がバンドルに同梱されます。各プラットフォームの起動アイコンと実機での表示は未確認です。
+
 ## プラットフォームと検証状況
 
 以下は **2026-11-12** 時点の記録です。「実装済み」と「実機検証済み」は区別しています。
@@ -23,7 +38,7 @@ Flutter 製のギター練習・即興演奏ツール集です。ドラムマシ
 | --- | --- | --- | --- |
 | Android | 接続済み、スマートベース・コード進行同梱 | 内蔵ペダル 8 種・アンプ 4 種 | Debug APK ビルド済み。x86_64 エミュレーターで権限・モニタリング・バックグラウンド動作を確認。実機オーディオは未検証 |
 | iOS | 接続済み、スマートベース・コード進行同梱 | 内蔵ペダル 8 種・アンプ 4 種 | ネイティブ実装済み。Xcode ビルド・実機は未検証 |
-| Windows | 接続済み、スマートベース・コード進行同梱 | 内蔵（8 種）・アンプ（4 種）・VST3・導入済み VST3 / VST2 プラグインのスキャン・ゲームパッドのトリガーによるワウ制御 | Debug ビルドとアプリの起動を確認（2026-11-08）。ネイティブホストのオフライン `--test-builtins` も成功。プラグインのスキャンコマンドは実装済みで本機のビルドも通過し、スキャン結果は本機に導入済みの VST3 で確認済み。実機オーディオ、第三者 VST3 プラグインの実際の聴感、ゲームパッド入力層は未検証（入力層は未ビルド・未実行） |
+| Windows | 接続済み、スマートベース・コード進行同梱 | 内蔵（8 種）・アンプ（4 種）・VST3・導入済み VST3 / VST2 プラグインのスキャン・ゲームパッドのトリガーによるワウ制御 | Debug ビルドとアプリの起動を確認（2026-11-08）。ネイティブホストのオフライン `--test-builtins` も成功。プラグインのスキャンコマンドは実装済みで本機のビルドも通過し、スキャン結果は本機に導入済みの VST3 で確認済み。実機オーディオ、第三者 VST3 プラグインの実際の聴感、ゲームパッド入力層は未検証（入力層は未ビルド・未実行）；2026-11-11 にインストールパッケージのビルドとウィザードでのインストール／アンインストールを検証済み（静默インストールは自動化の sandbox では拒否される） |
 | macOS | 接続済み、入力音を直接録音、スマートベース・コード進行同梱 | 未対応 | ビルド・実機は未検証 |
 | Linux | 接続済み、スマートベース・コード進行同梱 | 内蔵（8 種）・アンプ（4 種）・VST3・導入済み VST3 / VST2 プラグインのスキャン・ゲームパッドのトリガーによるワウ制御 | Debug ビルド、オフライン DSP、無音でのデバイス・バッファ確認済み。ゲームパッド入力はプロファイラー有効下で CLI レベルおよび GUI エンドツーエンド検証済み（接続安定・毎秒再接続なし・fd リークなし。実トリガー読み値は未検証）。プラグインのスキャンコマンドは Windows と同じデスクトップ宿主で実装されており、Linux でのスキャン結果は未実測。実演奏、物理的な往復遅延は未検証 |
 | Web | 接続済み、入力音を直接録音、スマートベース・コード進行同梱 | デスクトップブラウザーの内蔵ペダル 8 種・アンプ 4 種（今回の変更・実装済み、ページ全体の自動実測は通過。VST3、プラグインスキャン、ウェット Looper は非対応）と、ブラウザー Gamepad API によるゲームパッドトリガーのワウ制御（今回の追加） | Release ビルド済み。ブラウザーの自動実測は通過、実機での音声は未検証。ゲームパッドトリガーは単体テストのみで、実機でのゲームパッドテストは未実施 |
@@ -167,7 +182,7 @@ build/flutter-sdk/bin/dart run tool/probe_gamepad.dart
 
 ## ソースから実行
 
-現在、公式インストーラーや公開 Web アプリはありません。Flutter と `pubspec.yaml` の Dart 条件（現在 `^3.12.0`）、対象環境の開発ツールを用意します。
+現在、公開 Web アプリはありません。アプリは主にソースから実行し、Windows ではデスクトップ版をインストーラーへパッケージすることもできます（下記の「Windows インストールパッケージのビルド」の節を参照）。Flutter と `pubspec.yaml` の Dart 条件（現在 `^3.12.0`）、対象環境の開発ツールを用意します。
 
 ```bash
 flutter doctor
@@ -230,6 +245,28 @@ Windows 低遅延: ASIO（2026-11-08）。デスクトップ用エフェクト�
 入力チャンネルの選択と自動追従（2026-11-08）。ホストは常に 1 入力でデバイスを開いており（`devices.initialise(1, 2, nullptr, true)`、JUCE の `useDefaultInputChannels = true`）、コールバックでも 1 番目の入力を固定で監視していました。ギターは通常インターフェースの 2 番目の入力（Scarlett の Inst 1）に挿すため、監視対象は完全なデジタル無音でした。デバイス選択ウィンドウはデバイス種別の変更時にチャンネル数を 1 に戻すため、ASIO に切り替えても解決しませんでした。修正後は最大 4 入力まで開き（明示的なチャンネルマスクを使い、ドライバーが受け付けない幅にはフォールバック）、コールバックで各チャンネルのピークを測り、既定では 1.5 倍のヒステリシス付きで信号の最も強いチャンネルに追従します（ページで手動固定も可）。`status` に `inputChannelNames` / `inputChannelLevels` / `activeInputChannel` / `autoInputChannel` を追加し、`inputChannel` コマンドで自動／固定を切り替えます。検証（2026-11-08）：本機の Focusrite USB で `status` は `"inputChannels": 2`、`"inputChannelNames": ["Input channel 1", "Input channel 2"]` を報告（以前は 1 入力のみ）、Windows Debug ビルドと `flutter run -d windows --debug` は成功。ギターを挿した状態での実測レベルと自動追従の選択結果は実機での確認が未了です。
 
 詳細は [中国語のセットアップ・操作説明](README.md)、[デスクトップエフェクト](native/effects_host/README.md)、[モバイルエフェクト](native/mobile_effects/README.md)、[現在の機能設計](docs/FEATURES.md) を参照してください。
+
+## Windows インストールパッケージのビルド（Inno Setup、2026-11-11）
+
+これまで Windows のデスクトップビルドは、`build/windows/x64/runner/Release` フォルダ一式を渡すことしかできませんでした。利用者が自分でフォルダをコピーし、`guitarbook.exe`、ネイティブのエフェクトホスト `guitarbook_effects_host.exe`、`flutter_windows.dll`、プラグインの dll、オーディオデコーダの dll、`data/` をそのまま配置し続ける必要があり、1 つでもファイルが欠ければ起動できず、アンインストールの入口もありませんでした。新たなインストーラーはその出力をまるごと 1 つの配布用 `.exe` にまとめます。ダブルクリックでインストールでき、後から通常の方法でアンインストールできます。
+
+インストーラーの設定の正本は `windows/installer/guitarbook.iss`（Inno Setup 6 のスクリプト）、パッケージ作成の入口は `tool/build_windows_installer.ps1`（PowerShell 7）です。前提条件は Inno Setup 6（`winget install JRSoftware.InnoSetup`。ビルドには `ISCC.exe` が必要）、既存のツールチェーン（Flutter の Windows デスクトップ対応と Visual Studio の MSVC ツールチェーン）、PowerShell 7 です。
+
+コマンド 1 つでパッケージを作成します。
+
+```powershell
+pwsh -File tool/build_windows_installer.ps1
+```
+
+スクリプトは `flutter build windows --release` を実行し、成果物を検証したうえで `windows/installer/guitarbook.iss` を `ISCC.exe` でコンパイルします。オプションは `-SkipFlutterBuild`（既存の Release 成果物を再利用）、`-Configuration Release`（ビルド構成）、`-OutputDir build/installer`（出力先）、`-Version <x.y.z>`（バージョンを上書き。既定値は `pubspec.yaml` の `version: 1.0.0+1`）、`-IsccPath <ISCC.exe のパス>` です。バージョンは `pubspec.yaml` から取り出し、ファイル名には x.y.z の部分だけを使うので、出力は `build/installer/guitarbook_setup_1.0.0.exe`（約 14.37 MB）になります。Flutter ビルドと成果物チェックを省いた手動コンパイルは `"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=1.0.0 windows\installer\guitarbook.iss` です。
+
+インストーラーには `build/windows/x64/runner/Release` の**全部**が入ります。`guitarbook.exe`、隣に置く必要がある `guitarbook_effects_host.exe`、`flutter_windows.dll`、プラグインの dll（`flutter_soloud_plugin.dll`、`record_windows_plugin.dll`）、オーディオデコーダの dll（FLAC / ogg / opus / vorbis）、そして `data/`（`app.so`、`icudtl.dat`、`flutter_assets/`、`licenses/`。JUCE / VST3 / ASIO の文言も含む）です。`build/windows/x64/install` にある JUCE のヘッダはコンパイル時だけのもので、同梱はしません。
+
+既定では `%LOCALAPPDATA%\Programs\GuitarBook` にユーザー単位でインストールします（管理者権限も UAC の確認も不要）。ウィザードからシステム全体へのインストールも選べます。パッケージは**コード署名していない**ため、Windows の SmartScreen が「未知発行者」と表示することがあります。その場合は「詳細情報 → 実行」を選んでください。コード署名はまだ実装していません。
+
+推奨する使い方としては、インストーラーをダブルクリックして一般的な MSI パッケージと同じように画面上のウィザードを進めることです（「次へ」を最後まで押せば、管理者権限なしで既定のフォルダへ入ります）。アンインストールは「スタートメニュー → 吉他宝典 → GuitarBook のアンインストール」または「設定 → アプリ → インストール済みのアプリ」から行います。パラメータによる無人インストール（`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=<temp dir>`、削除は `<temp dir>\unins000.exe /VERYSILENT`）も可能ですが、無人インストールは推奨しません。
+
+検証（2026-11-11）：パッケージ作成の流れは確認済みで、`pwsh -File tool/build_windows_installer.ps1` が `build/installer/guitarbook_setup_1.0.0.exe`（約 14.37 MB）を生成しました。画面上のウィザードでのインストール／アンインストールも確認して正しく動くことを確認しています（インストール先のフォルダ、スタートメニューのグループ「吉他宝典」、「アプリと機能」のアンインストール項目、アンインストール後にインストール先のフォルダが削除されることを含みます）。無人インストールのパラメータは自動化の sandbox 内のシステムに拒否されます（スタートメニューのフォルダとアンインストール用のレジストリキーを書こうとせず、ロールバックして終了コード 4 になります）。これはその実行環境の制約で、インストーラーの不具合ではありません。無人インストールを推奨しない理由はこれです。詳細は [現在の機能設計](docs/FEATURES.md) の「Windows 安装包打包（2026-11-11）」の節を参照してください。
 
 ## Web 版の自動デプロイ（GitHub Actions、2026-11-09）
 

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../app/brand.dart';
 import 'band_controller.dart';
 import 'chord_progression.dart';
 
@@ -37,17 +38,7 @@ class BandPanel extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: colors.secondaryContainer,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  Icons.queue_music,
-                  color: colors.onSecondaryContainer,
-                ),
-              ),
+              ToolIllustration(asset: AppAssets.band, size: 44, radius: 12),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

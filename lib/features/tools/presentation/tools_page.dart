@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../app/brand.dart';
 import '../../tuner/tuner_page.dart';
 import '../../drums/drums_page.dart';
 import '../../chords/chords_page.dart';
@@ -13,7 +14,16 @@ class ToolsPage extends StatelessWidget {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('吉他宝典')),
+      appBar: AppBar(
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const BrandMark(size: 28, semanticLabel: '吉他宝典'),
+            const SizedBox(width: 10),
+            const Text('吉他宝典'),
+          ],
+        ),
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
@@ -29,31 +39,67 @@ class ToolsPage extends StatelessWidget {
                       color: colors.primaryContainer,
                       borderRadius: BorderRadius.circular(28),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          Icons.graphic_eq,
-                          color: colors.onPrimaryContainer,
-                          size: 32,
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final artwork = ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: AspectRatio(
+                            aspectRatio: 16 / 9,
+                            child: Image.asset(
+                              AppAssets.heroHome,
+                              fit: BoxFit.cover,
+                              semanticLabel: '吉他宝典首页插画',
+                            ),
+                          ),
+                        );
+                        final headline = Text(
                           '每一次拨弦，\n都更进一步。',
                           style: theme.textTheme.headlineMedium?.copyWith(
                             color: colors.onPrimaryContainer,
                             fontWeight: FontWeight.w700,
                             height: 1.35,
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
+                        );
+                        final caption = Text(
                           '调准琴弦，找到节奏，开始今天的练习。',
                           style: theme.textTheme.bodyLarge?.copyWith(
                             color: colors.onPrimaryContainer,
                           ),
-                        ),
-                      ],
+                        );
+                        // 宽屏（桌面 / 平板横屏）改成左右分栏：横幅插画保持 16:9 完整展示，
+                        // 文案移到右侧，避免整幅插画把下方工具卡片挤出首屏。
+                        if (constraints.maxWidth >= 700) {
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(flex: 5, child: artwork),
+                              const SizedBox(width: 28),
+                              Expanded(
+                                flex: 4,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    headline,
+                                    const SizedBox(height: 12),
+                                    caption,
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            artwork,
+                            const SizedBox(height: 20),
+                            headline,
+                            const SizedBox(height: 12),
+                            caption,
+                          ],
+                        );
+                      },
                     ),
                   ),
                   const SizedBox(height: 28),
@@ -64,13 +110,13 @@ class ToolsPage extends StatelessWidget {
                       _Tool(
                         '吉他调音器',
                         '标准六弦调音 · 实时音高与偏差',
-                        Icons.tune,
+                        AppAssets.tuner,
                         TunerPage(),
                       ),
                       _Tool(
                         '节拍器',
                         '稳定节奏 · 速度调节与首拍重音',
-                        Icons.timer_outlined,
+                        AppAssets.metronome,
                         MetronomePage(),
                       ),
                     ],
@@ -82,13 +128,13 @@ class ToolsPage extends StatelessWidget {
                       _Tool(
                         '和弦练习',
                         '12 课循序学习 · 三和弦、转位与常见七和弦',
-                        Icons.music_note,
+                        AppAssets.chords,
                         ChordsPage(),
                       ),
                       _Tool(
                         '音阶指板',
                         '各调常用音阶 · CAGED / 一弦三音',
-                        Icons.grid_on,
+                        AppAssets.scales,
                         ScalesPage(),
                       ),
                     ],
@@ -100,7 +146,7 @@ class ToolsPage extends StatelessWidget {
                       _Tool(
                         '即兴工作台',
                         '鼓机 · 智能base · 和弦进行 · Looper 与实时效果器',
-                        Icons.queue_music,
+                        AppAssets.jam,
                         DrumsPage(),
                       ),
                     ],
@@ -116,10 +162,10 @@ class ToolsPage extends StatelessWidget {
 }
 
 class _Tool {
-  const _Tool(this.title, this.description, this.icon, this.page);
+  const _Tool(this.title, this.description, this.asset, this.page);
   final String title;
   final String description;
-  final IconData icon;
+  final String asset;
   final Widget page;
 }
 
@@ -183,19 +229,10 @@ class _ToolGroup extends StatelessWidget {
                               padding: const EdgeInsets.all(20),
                               child: Row(
                                 children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color:
-                                          theme.colorScheme.secondaryContainer,
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: Icon(
-                                      tool.icon,
-                                      color: theme
-                                          .colorScheme
-                                          .onSecondaryContainer,
-                                    ),
+                                  ToolIllustration(
+                                    asset: tool.asset,
+                                    size: 56,
+                                    radius: 14,
                                   ),
                                   const SizedBox(width: 16),
                                   Expanded(

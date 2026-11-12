@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import '../../app/brand.dart';
 import '../expression_pedal/expression_pedal_controller.dart';
 import '../expression_pedal/expression_pedal_panel.dart';
 import '../expression_pedal/gamepad_trigger.dart';
@@ -485,11 +486,23 @@ class _EffectsPageState extends State<EffectsPage> with WidgetsBindingObserver {
               : null,
           padding: const EdgeInsets.all(20),
           children: [
-            Text(
-              '你的单块效果器板',
-              style: theme.textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+            Row(
+              children: [
+                ToolIllustration(
+                  asset: AppAssets.effects,
+                  size: 44,
+                  radius: 12,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '你的单块效果器板',
+                    style: theme.textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             Text(

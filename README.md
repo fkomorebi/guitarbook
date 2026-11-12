@@ -13,7 +13,7 @@
 - **智能base**：工作台内新增的自动低音。实时识别当前输入的和弦，按鼓机的 BPM、拍号与底鼓落点自动整出一条与鼓机等长同步的低音线；三种风格（跟底鼓 / 根音律动 / 走动低音）、独立音量，和弦变化落在下一拍，关闭时不占用麦克风。
 - **乐队 · 和弦进行**：即兴工作台「乐队」的第三层（鼓机、智能base、和弦进行）。选一段和弦进行（流行进行、摇滚进行、布鲁斯进行、爵士进行、卡农进行、民谣进行、抒情进行、放克进行；名字统一带「进行」后缀，避免和鼓机的风格预设重名）后点「开始和弦进行」，就会按鼓机的速度、拍号与摇摆演奏四声部和弦伴奏；和弦变化落在小节线上，切换进行或演奏方式不会跳回第一小节，音量独立可调。只做合成，不用麦克风、不新增权限。
 
-鼓机与 Looper 已接入六个平台；实时效果器支持范围为 Android / iOS / Linux / Windows 与电脑端浏览器（浏览器版为本次变更实现、自动化整页实测已通过，并已完成真实声卡环回延迟实测；macOS 暂不支持），桌面版（Linux / Windows）另新增插件扫描，可自动列出本机已安装的 VST3 / VST2 并在「外部插件」面板一键加载（网页端不支持插件扫描），其中哇音的表情踏板（游戏手柄线性扳机）在 Linux / Windows 桌面版与电脑端浏览器提供（Web 端为本次新增，基于浏览器 Gamepad API）。鼓机与 Looper 各自循环，**目前没有自动节拍同步、量化或时间拉伸**（智能base、乐队 · 和弦进行与鼓机是按拍号逐样本对齐的，但 Looper 与鼓机之间仍不同步）。Looper 分层仅留在内存，离页清空；工作台新增整段循环录音，可保存混音 WAV，见下文。当前需从源码运行，构建通过与真机音频验证的区别见下方平台表。
+鼓机与 Looper 已接入六个平台；实时效果器支持范围为 Android / iOS / Linux / Windows 与电脑端浏览器（浏览器版为本次变更实现、自动化整页实测已通过，并已完成真实声卡环回延迟实测；macOS 暂不支持），桌面版（Linux / Windows）另新增插件扫描，可自动列出本机已安装的 VST3 / VST2 并在「外部插件」面板一键加载（网页端不支持插件扫描），其中哇音的表情踏板（游戏手柄线性扳机）在 Linux / Windows 桌面版与电脑端浏览器提供（Web 端为本次新增，基于浏览器 Gamepad API）。鼓机与 Looper 各自循环，**目前没有自动节拍同步、量化或时间拉伸**（智能base、乐队 · 和弦进行与鼓机是按拍号逐样本对齐的，但 Looper 与鼓机之间仍不同步）。Looper 分层仅留在内存，离页清空；工作台新增整段循环录音，可保存混音 WAV，见下文。当前主要从源码运行（Windows 另提供安装包打包流程，见下文「Windows 安装包打包」），构建通过与真机音频验证的区别见下方平台表。
 
 ## 欢迎 PR
 
@@ -31,7 +31,7 @@
 
 ## 当前进度
 
-已实现 Looper 叠录、鼓机、工具首页、零基础和弦练习、音阶指板、节拍器页面和标准六弦吉他调音器：自动识别所拨空弦、支持手动选弦，实时显示平滑频率、音分偏差、动画指针及稳定调准反馈，并可切换调音基准音（A4 = 440 Hz 国际标准基准 / A4 = 432 Hz 自然音准，432 Hz 下六根空弦目标频率整体低约 31.8 音分）。麦克风采集与各平台实际运行尚待设备验证，尚未提供正式安装包或在线访问地址。实时效果器的哇音还可用游戏手柄线性扳机控制位置：Linux / Windows 桌面版与电脑端浏览器（本次新增 Gamepad API 支持）均已接入。2026-11-03 修复了 Linux 端在 Dart VM 采样分析器（Flutter debug 构建默认开启）下每隔约 1 秒出现一次「已连接 → 已断开」循环的问题：分析器的 SIGPROF 会打断阻塞中的 `poll(2)` 返回 `EINTR`，旧代码把 -1 当成手柄断开；现已加入 EINTR 重试、修正 `open()` 的 `O_NONBLOCK` 参数、区分 EOF 与空读、重新启用时清空去重缓存。静态分析通过，相关 40 项测试通过；CLI 探针在 profiler 开启时只输出一条 `status=ready`（Flydigi Apex 5，量程 0–255）。GUI 端到端已在 profiler 开启的 Debug 构建中验证：打开开关即显示「已连接：Flydigi Apex 5」，连续 35 秒采样无回落循环、进程内恰好 1 个 `/dev/input/event20` fd，关→开 3 次均能恢复连接。切换到修复版本后需热重启或重启 App（hot reload 不会替换已运行的 isolate 代码）。真实扳机轴数值与哇音扫频听感仍待用户实测。电脑端浏览器版实时效果器（内置效果器）为本次变更：DSP 内核已通过 Node 离线回归（9 / 9）与 Chrome 156 无头端到端验证（38 / 38），Flutter Web 后端已落盘，静态分析与桌面 Chrome 整页自动化实测（29 / 29；2026-11-04 首页入口合并后复跑 33 / 33）通过；2026-11-04 起首页不再单列「实时效果器」，效果器统一从首页「即兴工作台」进入，进入后先做引擎与音频设备检测、再手动点「开始监听」；2026-11-03 完成真实声卡环回延迟实测两轮：本机网页端默认参数往返约 67–75 ms（浏览器只报输出侧 baseLatency 2.7 ms 与采集 21.3 ms，`outputLatency` 在 Linux Chrome 恒为 0），页面侧有效项是 `latencyHint: 0`（省约 8 ms）与 Chrome 启动参数 `--audio-buffer-size=128`（采集缓冲 21.3→2.7 ms，往返约 45 ms，省约 21–27 ms，脚本 `tool/web_low_latency.sh`）；PipeWire quantum 在本机 Chrome 环回上无稳定收益，剩余约 45 ms 在 Pulse/ALSA 播放路径与 USB/硬件，要进到 20 ms 以内需改用桌面原生宿主；延迟诊断面板已按此区分「浏览器报告输出侧 / 采集侧」与「需环回实测的往返延迟」并给出分级优化建议。真实吉他听感仍待验证。2026-11-05 新增「智能base」：在工作台内复用同一路输入实时识别当前和弦，按鼓机 BPM、拍号与底鼓落点自动整出一条与鼓机小节等长、同步的低音线（跟底鼓 / 根音律动 / 走动低音三种风格、独立音量、和弦变化落在下一拍、相位自动对齐）；静态分析与完整 263 项 Flutter 测试通过，Linux Debug 与 Web Release 构建通过，六平台真机演奏听感待验证。2026-11-09 新增「乐队 · 和弦进行」：即兴工作台「乐队」的第三层（鼓机、智能base、和弦进行），提供 8 段和弦进行预设与柱式 / 律动 / 琶音 / 扫弦四种演奏方式，和弦伴奏按鼓机小节逐小节对齐播放、和弦变化落在小节线上，只做合成因此不占用麦克风；静态分析无问题、`flutter test` 315 项全部通过（含新增 40 项乐队专项测试），各平台安装包未重新构建，真机听感待验证。
+已实现 Looper 叠录、鼓机、工具首页、零基础和弦练习、音阶指板、节拍器页面和标准六弦吉他调音器：自动识别所拨空弦、支持手动选弦，实时显示平滑频率、音分偏差、动画指针及稳定调准反馈，并可切换调音基准音（A4 = 440 Hz 国际标准基准 / A4 = 432 Hz 自然音准，432 Hz 下六根空弦目标频率整体低约 31.8 音分）。麦克风采集与各平台实际运行尚待设备验证，Windows 新增了安装包打包流程（见下文「Windows 安装包打包」，打包与图形向导安装 / 卸载已实测通过，静默安装路径未验证），macOS / Linux 等平台的正式安装包与在线访问地址仍未提供。实时效果器的哇音还可用游戏手柄线性扳机控制位置：Linux / Windows 桌面版与电脑端浏览器（本次新增 Gamepad API 支持）均已接入。2026-11-03 修复了 Linux 端在 Dart VM 采样分析器（Flutter debug 构建默认开启）下每隔约 1 秒出现一次「已连接 → 已断开」循环的问题：分析器的 SIGPROF 会打断阻塞中的 `poll(2)` 返回 `EINTR`，旧代码把 -1 当成手柄断开；现已加入 EINTR 重试、修正 `open()` 的 `O_NONBLOCK` 参数、区分 EOF 与空读、重新启用时清空去重缓存。静态分析通过，相关 40 项测试通过；CLI 探针在 profiler 开启时只输出一条 `status=ready`（Flydigi Apex 5，量程 0–255）。GUI 端到端已在 profiler 开启的 Debug 构建中验证：打开开关即显示「已连接：Flydigi Apex 5」，连续 35 秒采样无回落循环、进程内恰好 1 个 `/dev/input/event20` fd，关→开 3 次均能恢复连接。切换到修复版本后需热重启或重启 App（hot reload 不会替换已运行的 isolate 代码）。真实扳机轴数值与哇音扫频听感仍待用户实测。电脑端浏览器版实时效果器（内置效果器）为本次变更：DSP 内核已通过 Node 离线回归（9 / 9）与 Chrome 156 无头端到端验证（38 / 38），Flutter Web 后端已落盘，静态分析与桌面 Chrome 整页自动化实测（29 / 29；2026-11-04 首页入口合并后复跑 33 / 33）通过；2026-11-04 起首页不再单列「实时效果器」，效果器统一从首页「即兴工作台」进入，进入后先做引擎与音频设备检测、再手动点「开始监听」；2026-11-03 完成真实声卡环回延迟实测两轮：本机网页端默认参数往返约 67–75 ms（浏览器只报输出侧 baseLatency 2.7 ms 与采集 21.3 ms，`outputLatency` 在 Linux Chrome 恒为 0），页面侧有效项是 `latencyHint: 0`（省约 8 ms）与 Chrome 启动参数 `--audio-buffer-size=128`（采集缓冲 21.3→2.7 ms，往返约 45 ms，省约 21–27 ms，脚本 `tool/web_low_latency.sh`）；PipeWire quantum 在本机 Chrome 环回上无稳定收益，剩余约 45 ms 在 Pulse/ALSA 播放路径与 USB/硬件，要进到 20 ms 以内需改用桌面原生宿主；延迟诊断面板已按此区分「浏览器报告输出侧 / 采集侧」与「需环回实测的往返延迟」并给出分级优化建议。真实吉他听感仍待验证。2026-11-05 新增「智能base」：在工作台内复用同一路输入实时识别当前和弦，按鼓机 BPM、拍号与底鼓落点自动整出一条与鼓机小节等长、同步的低音线（跟底鼓 / 根音律动 / 走动低音三种风格、独立音量、和弦变化落在下一拍、相位自动对齐）；静态分析与完整 263 项 Flutter 测试通过，Linux Debug 与 Web Release 构建通过，六平台真机演奏听感待验证。2026-11-09 新增「乐队 · 和弦进行」：即兴工作台「乐队」的第三层（鼓机、智能base、和弦进行），提供 8 段和弦进行预设与柱式 / 律动 / 琶音 / 扫弦四种演奏方式，和弦伴奏按鼓机小节逐小节对齐播放、和弦变化落在小节线上，只做合成因此不占用麦克风；静态分析无问题、`flutter test` 315 项全部通过（含新增 40 项乐队专项测试），各平台安装包未重新构建，真机听感待验证。2026-11-11 新增「视觉素材」：用本机 ComfyUI 工作流生成 9 张插画（首页横幅、应用图标、五张工具卡插画），风格统一为扁平编辑插画（暖米白底、深青绿与陶土红点缀、无文字），并接入标题栏应用图标、首页品牌横幅、首页工具卡片与即兴工作台的鼓机 / 乐队 / 效果器面板；素材以 WebP 随包分发，合计约 238 KB，不依赖网络、不新增权限；静态分析无问题、`flutter test` 319 项全部通过（含新增 3 项素材测试），Web Release 构建通过且 9 张资源已随包分发，各平台启动图标与真机显示效果待验证。
 
 节拍器已改为音频引擎连续循环播放，按采样帧生成拍音；Linux Debug 与 Web 构建通过，实际音频延迟和各平台设备运行仍待验证。
 
@@ -46,6 +46,19 @@ Windows 桌面构建于 2026-11-08 修好（根因两处：MSVC 未加 `/utf-8` 
 首页按“练习准备 / 理解与练习 / 即兴创作”分组：先调音与练节奏，再进入和弦、音阶或即兴工作台（鼓机、Looper 与效果器）。点击整张工具卡片进入；宽屏双列（“即兴工作台”卡片占满整行），手机和大字号下单列，可纵向滚动。
 
 本轮静态分析、69 项 Flutter 测试通过，已检查真实中文字体和图标的桌面明暗预览；Web Release 构建通过。各平台实际设备显示、操作与音频状态沿用下表，不能据此视为设备验证完成。
+
+## 视觉素材（2026-11-11）
+
+应用内插画与应用图标由本机 ComfyUI 工作流生成，风格统一为扁平编辑插画：纸张颗粒质感、暖米白（#F7F5EF）背景、深青绿（#24695C）主色、陶土红（#A34225）点缀，图中不含文字。
+
+- 首页顶部新增品牌横幅插画（配文“每一次拨弦，都更进一步。”），标题栏左侧显示圆形应用图标；宽屏下横幅插画与文案左右分栏，窄屏保持上下堆叠。
+- 首页五张工具卡片改用对应主题插画：调音器、节拍器、和弦练习、音阶指板、即兴工作台。
+- 即兴工作台的鼓机、乐队（和弦进行）与效果器面板标题旁显示对应插画；智能base 面板保留原有图标，避免同屏重复插画。
+- 素材以 WebP 随应用打包（应用图标 512×512、工具插画 512×512、首页横幅 1280×720，合计约 238 KB），不依赖网络，也不新增任何权限。
+
+素材流水线在 `tool/` 下可复现：`tool/comfy_generate.js` 调用本机 ComfyUI（默认 http://127.0.0.1:8188），按 `tool/assets.json` 的提示词批量出图到 `.tools/raw/`；`tool/build_assets.js` 裁剪缩放为 `assets/images/*.webp`；`tool/build_icons.js` 由应用图标生成各平台启动图标。生成素材需要本机已安装并运行 ComfyUI，原始大图不随仓库提供（`.tools/` 已被忽略）。
+
+验证：`flutter analyze` 无问题；`flutter test` 319 项全部通过（含新增的 `test/brand_assets_test.dart`，覆盖资源加载与 320×568 窄屏 / 1440×900 宽屏布局）；Web Release 构建通过，9 张资源已随包分发。各平台启动图标与真机显示效果待实机查看。
 
 ## 各平台功能
 
@@ -491,6 +504,83 @@ endif()
 验证（2026-11-08，Windows Debug 构建）：`flutter build windows --debug` 成功；宿主在本机 Focusrite USB 上 `status` 返回 `"inputChannels": 2`、`"inputChannelNames": ["Input channel 1", "Input channel 2"]`、`"inputChannelLevels": [0.0, 0.0]`、`"autoInputChannel": true`（修复前只会打开 1 路），输入端点为「Analogue 1 + 2 (Focusrite USB Audio)」；`flutter run -d windows --debug` 构建并正常启动；`dart analyze lib` 无问题。
 
 仍待验证：插上吉他后各路电平的实测数值与自动跟随实际选中的通道，以及 ASIO 与 WASAPI 的输入通道映射是否一致（ASIO 的位掩码第 i 位对应第 i 路 ASIO 输入，不做立体声配对扩展）。
+
+## Windows 安装包打包（Inno Setup，2026-11-11）
+
+Windows 桌面版此前只能把 `build/windows/x64/runner/Release` 整个目录交出去：使用者要自己复制文件夹，而且必须原样保留其中的 `guitarbook.exe`、原生效果器宿主 `guitarbook_effects_host.exe`、`flutter_windows.dll`、插件 dll、音频解码 dll 和 `data/`，少一个文件就会启动失败，也没有卸载入口。新增的安装包把这份完整产物打成一个可分发的 `.exe`：双击即可安装，安装后带标准卸载程序。
+
+仓库内以 `windows/installer/guitarbook.iss`（Inno Setup 6 脚本）作为安装包设置的唯一来源，打包入口是 `tool/build_windows_installer.ps1`（PowerShell 7）。
+
+### 前置条件
+
+- Inno Setup 6：`winget install JRSoftware.InnoSetup`（编译时需要其中的 `ISCC.exe`）。
+- 既有工具链：Flutter Windows 桌面支持 + Visual Studio 的 MSVC 工具链（与 `flutter build windows` 一致）。
+- PowerShell 7（命令为 `pwsh`）。
+
+### 一条命令打包
+
+```powershell
+pwsh -File tool/build_windows_installer.ps1
+```
+
+脚本会依次执行 `flutter build windows --release`、校验发布产物，再用 Inno Setup 6 的 `ISCC.exe` 编译 `windows/installer/guitarbook.iss`。可选参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `-SkipFlutterBuild` | 跳过 `flutter build windows --release`，直接用已有的 Release 产物打包 |
+| `-Configuration Release` | 构建配置 |
+| `-OutputDir build/installer` | 安装包输出目录 |
+| `-Version <x.y.z>` | 覆盖版本号；默认取 `pubspec.yaml` 的 `version: 1.0.0+1` |
+| `-IsccPath <path to ISCC.exe>` | 指定 `ISCC.exe` 路径 |
+
+版本号来自 `pubspec.yaml`（当前 `version: 1.0.0+1`），安装包文件名只取其中的 x.y.z 部分。
+
+### 产物位置
+
+`build/installer/guitarbook_setup_<version>.exe`，按当前 `pubspec.yaml` 版本即 `build/installer/guitarbook_setup_1.0.0.exe`。
+
+跳过 Flutter 构建与产物校验时的等价手动编译命令：
+
+```powershell
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=1.0.0 windows\installer\guitarbook.iss
+```
+
+### 随包分发与不分发的内容
+
+安装包包含 `build/windows/x64/runner/Release` 的**完整**内容：
+
+- `guitarbook.exe`：主程序。
+- `guitarbook_effects_host.exe`：原生效果器宿主，必须与主程序同目录（Dart 侧按运行 exe 所在目录查找它）。
+- `flutter_windows.dll`：Flutter 引擎运行时。
+- 插件 dll：`flutter_soloud_plugin.dll`、`record_windows_plugin.dll`。
+- 音频解码 dll：FLAC / ogg / opus / vorbis 系列。
+- `data/`：`app.so`、`icudtl.dat`、`flutter_assets/`，以及 `licenses/`（含 JUCE / VST3 / ASIO 的许可文本）。
+
+不随包分发：`build/windows/x64/install` 下的 JUCE 模块头文件只用于编译，不进入安装包。
+
+### 安装位置与签名
+
+默认安装到 `%LOCALAPPDATA%\Programs\GuitarBook`（按用户安装，不需要管理员权限，也不会弹 UAC）；向导里也可以改为整台机器范围的安装。
+
+安装包目前**未做代码签名**，Windows SmartScreen 可能提示「未知发布者」，此时点「更多信息 → 仍要运行」即可；代码签名尚未实现。
+
+### 安装与卸载验证
+
+推荐用法就是**双击安装包，按图形向导安装**（和常见 MSI 安装包一样）：一路「下一步」即可装到默认目录 `%LOCALAPPDATA%\Programs\GuitarBook`，全程不需要管理员权限，也不会弹 UAC。卸载走「开始菜单 → 吉他宝典 → 卸载 GuitarBook」或「设置 → 应用 → 已安装的应用 → 卸载」。
+
+如需脚本化安装，也可追加静默参数：
+
+```powershell
+"build\installer\guitarbook_setup_1.0.0.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=<temp dir>
+```
+
+随后确认 `<temp dir>\guitarbook.exe` 与 `<temp dir>\guitarbook_effects_host.exe` 都存在，再用卸载程序清理：
+
+```powershell
+<temp dir>\unins000.exe /VERYSILENT
+```
+
+验证（2026-11-11）：打包流程实测通过——`pwsh -File tool/build_windows_installer.ps1` 产出 `build/installer/guitarbook_setup_1.0.0.exe`（约 14.37 MB）；安装与卸载按图形向导方式实测通过（安装目录、开始菜单程序组「吉他宝典」、「应用和功能」中的卸载项均正常，卸载后安装目录被清理）。静默参数在自动化沙箱进程里会被系统拒绝写开始菜单目录与卸载注册表键并回滚（退出码 4），属该环境的限制而非安装包缺陷，因此静默安装不作为推荐路径；细节见 [功能设计](docs/FEATURES.md) 的「Windows 安装包打包（2026-11-11）」一节。
 
 ## 调音反馈改进（2026-10-27）
 

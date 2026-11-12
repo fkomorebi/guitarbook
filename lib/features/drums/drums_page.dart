@@ -1,3 +1,4 @@
+import '../../app/brand.dart';
 import '../../app/theme.dart';
 import 'package:flutter/material.dart';
 
@@ -546,14 +547,7 @@ class _DrumsPageState extends State<DrumsPage> with WidgetsBindingObserver {
         children: [
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: colors.primaryContainer,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(Icons.graphic_eq, color: colors.onPrimaryContainer),
-              ),
+              ToolIllustration(asset: AppAssets.jam, size: 44, radius: 12),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
